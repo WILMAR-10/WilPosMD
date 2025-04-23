@@ -1,6 +1,29 @@
-// preload.cjs
+// preload.cjs - Modificado para mejorar soporte de impresión
 const { contextBridge, ipcRenderer } = require('electron');
 
+// Función para envolver métodos de API con manejo de errores
+const wrapApiMethod = (method, methodName) => {
+  return async (...args) => {
+    try {
+      return await method(...args);
+    } catch (error) {
+      console.error(`Error en ${methodName}:`, error);
+      return { 
+        success: false, 
+        error: error.message || `Error desconocido en ${methodName}`
+      };
+    }
+  };
+};
+
+// Base context API
+contextBridge.exposeInMainWorld('versions', {
+  node: () => process.versions.node,
+  chrome: () => process.versions.chrome,
+  electron: () => process.versions.electron
+});
+
+// API Principal
 contextBridge.exposeInMainWorld('api', {
   // Window control handlers
   minimize: () => ipcRenderer.invoke('minimize'),
@@ -59,42 +82,53 @@ contextBridge.exposeInMainWorld('api', {
   login: (credentials) => ipcRenderer.invoke('login', credentials),
   logout: () => ipcRenderer.invoke('logout'),
   
-  // PDF and printer methods
-  printInvoice: async (options) => {
-    try {
-      // Validate required parameters
-      if (!options || typeof options !== 'object') {
-        return { success: false, error: 'Invalid options parameter' };
-      }
-      
-      if (!options.html || typeof options.html !== 'string') {
-        return { success: false, error: 'HTML content is required' };
-      }
-      
-      // Send the print request to main process
-      const result = await ipcRenderer.invoke('printInvoice', {
-        html: options.html,
-        printerName: options.printerName,
-        silent: options.silent !== undefined ? options.silent : true,
-        copies: options.copies || 1,
-        options: {
-          // Pass thermal printer specific options
-          thermalPrinter: options.thermalPrinter || false,
-          pageSize: options.pageSize || 'A4',
-          width: options.width || '80mm'
-        }
-      });
-      
-      return result;
-    } catch (error) {
-      console.error('Error in printInvoice bridge:', error);
-      return { success: false, error: error.message || 'Unknown error in print handler' };
+  // PDF and printer methods (Improved error handling)
+  printInvoice: wrapApiMethod(async (options) => {
+    // Validación básica de parámetros
+    if (!options || typeof options !== 'object') {
+      return { success: false, error: 'Parámetros de impresión inválidos' };
     }
-  },
-  savePdf: ({ html, path, options }) => ipcRenderer.invoke('savePdf', { html, path, options }),
+    
+    if (!options.html || typeof options.html !== 'string') {
+      return { success: false, error: 'Contenido HTML requerido' };
+    }
+    
+    // Sanear las opciones antes de enviarlas
+    const printOptions = {
+      html: options.html,
+      printerName: options.printerName || undefined,
+      silent: options.silent !== undefined ? options.silent : true,
+      copies: options.copies || 1,
+      options: {
+        // Opciones para impresora térmica
+        thermalPrinter: options.options?.thermalPrinter || false,
+        pageSize: options.options?.pageSize || 'A4',
+        width: options.options?.width || '80mm',
+        ...options.options
+      }
+    };
+    
+    console.log('Enviando solicitud de impresión con:', {
+      printerName: printOptions.printerName, 
+      silent: printOptions.silent,
+      thermalPrinter: printOptions.options.thermalPrinter
+    });
+    
+    // Enviar petición al proceso principal
+    const result = await ipcRenderer.invoke('printInvoice', printOptions);
+    console.log('Resultado de impresión:', result);
+    
+    return result;
+  }, 'printInvoice'),
+  
+  savePdf: wrapApiMethod(async ({ html, path, options }) => {
+    return await ipcRenderer.invoke('savePdf', { html, path, options });
+  }, 'savePdf'),
   
   // File/folder management
-  openFolder: (folderPath) => ipcRenderer.invoke('openFolder', folderPath),
+  openFolder: wrapApiMethod(async (folderPath) => {
+    return await ipcRenderer.invoke('openFolder', folderPath);
+  }, 'openFolder'),
   
   // Window management
   openComponentWindow: (component) => ipcRenderer.invoke('openComponentWindow', component),
@@ -117,9 +151,36 @@ contextBridge.exposeInMainWorld('api', {
   
   broadcastSyncEvent: (event) => {
     ipcRenderer.send('broadcast-sync-event', event);
-  }
+  },
+  
+  // === NUEVA API: getPrinters ===
+  getPrinters: wrapApiMethod(async () => {
+    try {
+      console.log('Solicitando impresoras al proceso principal');
+      const printers = await ipcRenderer.invoke('getPrinters');
+      return printers;
+    } catch (error) {
+      console.error('Error obteniendo impresoras:', error);
+      // Si falla, intentar obtener impresoras desde webContents directamente
+      const wc = require('electron').webContents.getFocusedWebContents();
+      if (wc && wc.getPrinters) {
+        const printers = wc.getPrinters();
+        console.log('Impresoras obtenidas directamente:', printers);
+        return printers.map(p => ({
+          ...p,
+          isThermal: p.name.toLowerCase().includes('thermal') || 
+                    p.name.toLowerCase().includes('receipt') || 
+                    p.name.toLowerCase().includes('pos') || 
+                    p.name.toLowerCase().includes('80mm') || 
+                    p.name.toLowerCase().includes('58mm')
+        }));
+      }
+      throw error;
+    }
+  }, 'getPrinters')
 });
 
+// Expose app state management
 contextBridge.exposeInMainWorld('electron', {
   app: {
     getState: () => ipcRenderer.invoke('app:getState'),
@@ -127,8 +188,67 @@ contextBridge.exposeInMainWorld('electron', {
   }
 });
 
-// Expose print functionality
+// Expose print functionality with improved error handling
 contextBridge.exposeInMainWorld('electronPrinting', {
-  getPrinters: () => ipcRenderer.invoke('getPrinters'),
-  printInvoice: (options) => ipcRenderer.invoke('printInvoice', options)
+  getPrinters: wrapApiMethod(async () => {
+    // Intentar primero a través de ipcRenderer
+    try {
+      const printers = await ipcRenderer.invoke('getPrinters');
+      
+      // Detectar impresoras térmicas
+      return printers.map(printer => {
+        const name = printer.name.toLowerCase();
+        const isThermal = name.includes('thermal') || 
+                          name.includes('receipt') || 
+                          name.includes('pos') || 
+                          name.includes('80mm') || 
+                          name.includes('58mm');
+        
+        return {
+          ...printer,
+          isThermal
+        };
+      });
+    } catch (error) {
+      console.error('Error al obtener impresoras mediante IPC:', error);
+      
+      // Plan B: Usar webContents directamente
+      try {
+        const printers = [];
+        const webContents = require('electron').webContents.getFocusedWebContents();
+        
+        if (webContents) {
+          if (webContents.getPrinters) {
+            // Electron ≥ 12
+            const systemPrinters = webContents.getPrinters();
+            printers.push(...systemPrinters);
+          }
+        }
+        
+        // Identificar impresoras térmicas
+        return printers.map(printer => {
+          const name = printer.name.toLowerCase();
+          const isThermal = name.includes('thermal') || 
+                            name.includes('receipt') || 
+                            name.includes('pos') || 
+                            name.includes('80mm') || 
+                            name.includes('58mm');
+          
+          return {
+            ...printer,
+            isThermal
+          };
+        });
+      } catch (directError) {
+        console.error('Error al obtener impresoras directamente:', directError);
+        
+        // Plan C: Retornar un array vacío para no romper nada
+        return [];
+      }
+    }
+  }, 'electronPrinting.getPrinters'),
+  
+  printInvoice: wrapApiMethod(async (options) => {
+    return await ipcRenderer.invoke('printInvoice', options);
+  }, 'electronPrinting.printInvoice')
 });

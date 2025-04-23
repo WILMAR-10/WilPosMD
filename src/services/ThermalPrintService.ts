@@ -1,4 +1,4 @@
-// src/services/ThermalPrintService.ts
+// src/services/ThermalPrintService.ts - Versión corregida
 import { PreviewSale } from '../types/sales';
 
 // Define types for thermal printer paper size
@@ -7,15 +7,28 @@ export enum ThermalPaperSize {
   PAPER_58MM = '58mm'
 }
 
-// Printer connection interface
+// Improved printer connection interface
 export interface ThermalPrinterOptions {
   printerName?: string;
   paperSize?: ThermalPaperSize;
   timeout?: number;
 }
 
+// Character set fallbacks
+const CHARACTER_SETS = {
+  PC437_USA: 'pc437_usa',
+  PC850_MULTILINGUAL: 'pc850_multilingual',
+  PC858_EURO: 'pc858_euro',
+  PC860_PORTUGUESE: 'pc860_portuguese',
+  PC863_CANADIAN_FRENCH: 'pc863_canadian_french',
+  PC865_NORDIC: 'pc865_nordic',
+  PC866_CYRILLIC: 'pc866_cyrillic',
+  KATAKANA: 'katakana'
+};
+
 /**
  * Service for handling thermal printer operations
+ * with improved error handling and fallbacks
  */
 export class ThermalPrintService {
   private static instance: ThermalPrintService;
@@ -189,6 +202,7 @@ export class ThermalPrintService {
       if (window.electronPrinting?.getPrinters) {
         try {
           printers = await window.electronPrinting.getPrinters();
+          console.log("Got printers via electronPrinting:", printers);
         } catch (error) {
           console.warn('Error getting printers with electronPrinting:', error);
         }
@@ -198,6 +212,7 @@ export class ThermalPrintService {
       if (printers.length === 0 && window.api?.getPrinters) {
         try {
           printers = await window.api.getPrinters();
+          console.log("Got printers via window.api:", printers);
         } catch (error) {
           console.warn('Error getting printers with window.api:', error);
         }
@@ -399,9 +414,8 @@ export class ThermalPrintService {
   }
   
   /**
-   * Print a receipt to the thermal printer
-   * @param sale The sale to print
-   * @returns Result of the print operation
+   * Print a receipt directly to the printer using the Web API
+   * Instead of relying on node-thermal-printer which causes problems
    */
   public async printReceipt(sale: PreviewSale): Promise<{ success: boolean; message?: string }> {
     try {
@@ -412,22 +426,36 @@ export class ThermalPrintService {
       // Generate HTML content
       const htmlContent = this.generateThermalReceiptHTML(sale);
       
-      // Print options
+      // Direct printing via the electron-based window.api
+      console.log(`Sending print job to ${this.printerName || 'default printer'}`);
+      
+      // Build thermal-optimized options
       const printOptions = {
         html: htmlContent,
         printerName: this.printerName || undefined,
         silent: true,
         copies: 1,
         options: {
-          thermal: true,
+          // Mark as thermal printer for special handling in main process
+          thermalPrinter: true,
           width: this.paperSize,
-          characterSet: "LATIN1"
+          // Simplified options to avoid undefined properties
+          paperWidth: this.paperSize,
+          printSpeed: this.paperSize === ThermalPaperSize.PAPER_58MM ? '58mm' : '80mm',
+          fontSize: '12pt',
+          scaleFactor: 100,
+          printBackground: true,
+          margins: { 
+            marginType: 'custom',
+            top: 0,
+            bottom: 0,
+            left: 0,
+            right: 0
+          }
         }
       };
       
-      console.log(`Sending print job to ${this.printerName || 'default printer'}`);
-      
-      // Send print job
+      // Send print job using the main process API
       const result = await window.api.printInvoice(printOptions);
       
       if (result && result.success) {
@@ -437,6 +465,24 @@ export class ThermalPrintService {
       }
     } catch (error) {
       console.error('Error printing receipt:', error);
+      
+      // Create fallback print options with fewer properties that could fail
+      try {
+        console.log("Attempting fallback print method...");
+        const fallbackOptions = {
+          html: this.generateThermalReceiptHTML(sale),
+          printerName: this.printerName,
+          silent: true
+        };
+        
+        const fallbackResult = await window.api.printInvoice(fallbackOptions);
+        if (fallbackResult && fallbackResult.success) {
+          return { success: true, message: "Print job sent successfully (fallback method)" };
+        }
+      } catch (fallbackError) {
+        console.error("Fallback print method also failed:", fallbackError);
+      }
+      
       return { 
         success: false, 
         message: error instanceof Error ? error.message : 'Unknown printing error'
@@ -445,7 +491,7 @@ export class ThermalPrintService {
   }
   
   /**
-   * Test the thermal printer
+   * Test the thermal printer with a simplified test page
    * @returns Result of the test print
    */
   public async testPrinter(): Promise<{ success: boolean; message: string }> {
@@ -454,6 +500,7 @@ export class ThermalPrintService {
         throw new Error('Print API not available');
       }
       
+      // Create a simple but complete test HTML without complex structures
       const testHTML = `
         <!DOCTYPE html>
         <html>
@@ -513,6 +560,7 @@ export class ThermalPrintService {
         </html>
       `;
       
+      // Simplified print options to minimize possible issues
       const printOptions = {
         html: testHTML,
         printerName: this.printerName || undefined,

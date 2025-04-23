@@ -38,6 +38,13 @@ import {
   closeDB 
 } from './src/database/index.js';
 
+// Import printing functions
+import { 
+  printWithThermalPrinter,
+  printWithElectron,
+  getPrinters
+} from './src/printing/thermal-printer.js';
+
 // Set up directory paths
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged;
@@ -248,124 +255,30 @@ function createMainWindow() {
 // =====================================================
 
 function setupPrintHandlers() {
-  // Handler for printing invoices (siempre térmico)
+  // Handler for printing invoices
   ipcMain.handle('printInvoice', async (event, options) => {
     try {
-      console.log("Print request (siempre térmico):", options.printerName);
-      if (!options?.html) throw new Error('Missing HTML');
-
-      // crear HTML temporal
+      // Create temp file
       const tempDir = join(app.getPath('temp'), 'wilpos-prints');
       await fs.ensureDir(tempDir);
       const tempHtmlPath = join(tempDir, `print-${Date.now()}.html`);
       await fs.writeFile(tempHtmlPath, options.html);
 
-      // siempre usa impresión térmica
-      return await printWithThermalPrinter(options, tempHtmlPath);
-
+      // Use method based on options
+      if (options.useElectronPrint) {
+        return await printWithElectron(event, options, tempHtmlPath);
+      } else {
+        return await printWithThermalPrinter(options, tempHtmlPath);
+      }
     } catch (error) {
       console.error('printInvoice error:', error);
       return { success: false, error: error.message };
     }
   });
-
-  // thermal printer implementation
-  async function printWithThermalPrinter(options, tempHtmlPath) {
-    try {
-      console.log("Using node-thermal-printer");
-      // Leemos el HTML generado por el frontend
-      const htmlContent = await fs.readFile(tempHtmlPath, 'utf8');
-      const $ = load(htmlContent);
-
-      // Configura la impresora con página de código CP437 (compatible con tu SP‑POS891)
-      const printer = new ThermalPrinter({
-        type: PrinterTypes.EPSON,
-        interface: options.printerName
-          ? `printer:${options.printerName}`
-          : 'printer:POS891US',
-        characterSet: CharacterSet.PC437_USA,
-        removeSpecialCharacters: false,
-        lineCharacter: "-",
-        breakLine: BreakLine.WORD,
-        options: { timeout: 5000 }
-      });
-
-      // Selección de tamaño de fuente según ancho de papel
-      const roll = options.options.width === '58mm' ? 48 : 72;
-      printer.size(roll === 48 ? 0 : 1, roll === 48 ? 0 : 1);
-
-      // Encabezado
-      printer.alignCenter();
-      printer.bold(true).println($('h1.header').text().trim());
-      printer.bold(false).println($('h2.subheader').text().trim());
-      printer.drawLine();
-
-      // Datos de cliente/fecha
-      printer.alignLeft();
-      printer.println(`Fecha: ${new Date().toLocaleString()}`);
-      printer.println(`Cliente: ${$('.cliente').text().trim() || 'Cliente General'}`);
-      printer.drawLine();
-
-      // Detalle de productos
-      $('.item').each((_, el) => {
-        const name  = $(el).find('.producto').text().trim();
-        const qty   = $(el).find('.cantidad').text().trim();
-        const price = $(el).find('.precio').text().trim();
-        printer.tableCustom([
-          { text: name,  align: "LEFT",   width: 0.5  },
-          { text: qty,   align: "CENTER", width: 0.15 },
-          { text: price, align: "RIGHT",  width: 0.35 }
-        ]);
-      });
-
-      printer.drawLine();
-
-      // Total
-      printer.alignRight();
-      printer.bold(true).println($('div.total').text().trim());
-      printer.bold(false);
-
-      // Pie de página
-      printer.alignCenter();
-      printer.drawLine();
-      printer.println($('footer.footer').text().trim());
-
-      // Corta y ejecuta
-      printer.cut();
-      await printer.execute();
-      console.log("Thermal print success");
-
-      // Limpia el HTML temporal
-      await fs.unlink(tempHtmlPath).catch(() => {});
-      return { success: true };
-
-    } catch (error) {
-      console.error("Thermal printer error:", error);
-      return { success: false, error: error.message, needManualPrint: true };
-    }
-  }
-
-  // getPrinters with thermal flag
+  
+  // Printer listing handler
   ipcMain.handle('getPrinters', async (event) => {
-    const wc = event.sender;
-    try {
-      let list = [];
-      if (wc.getPrintersAsync) {
-        list = await wc.getPrintersAsync();
-      } else if (wc.getPrinters) {
-        list = wc.getPrinters();
-      }
-      return list.map(p => {
-        const name = p.name.toLowerCase();
-        return {
-          ...p,
-          isThermal: /thermal|receipt|pos|80mm|58mm/.test(name)
-        };
-      });
-    } catch (err) {
-      console.error('getPrinters error:', err);
-      return [];
-    }
+    return await getPrinters(event.sender);
   });
 }
 
