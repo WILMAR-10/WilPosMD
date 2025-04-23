@@ -41,7 +41,8 @@ import {
 // Import printing functions
 import { 
   printWithThermalPrinter,
-  getPrinters
+  getPrinters,
+  setupThermalPrintingHandlers
 } from './src/printing/thermal-printer.js';
 
 // Set up directory paths
@@ -254,33 +255,11 @@ function createMainWindow() {
 // =====================================================
 
 function setupPrintHandlers() {
-  // Handler for printing invoices
-  ipcMain.handle('printInvoice', async (event, options) => {
-    try {
-      // Create temp file
-      const tempDir = join(app.getPath('temp'), 'wilpos-prints');
-      await fs.ensureDir(tempDir);
-      const tempHtmlPath = join(tempDir, `print-${Date.now()}.html`);
-      await fs.writeFile(tempHtmlPath, options.html);
-
-      // Use method based on options
-      if (options.useElectronPrint) {
-        return await printWithElectron(event, options, tempHtmlPath);
-      } else {
-        return await printWithThermalPrinter(options, tempHtmlPath);
-      }
-    } catch (error) {
-      console.error('printInvoice error:', error);
-      return { success: false, error: error.message };
-    }
-  });
-  
-  // Printer listing handler
+  // Keep these handlers as they don't conflict
   ipcMain.handle('getPrinters', async (event) => {
     return await getPrinters(event.sender);
   });
 
-  // PDF saving handler
   ipcMain.handle('savePdf', async (event, options) => {
     try {
       if (!options.html || !options.path) {
@@ -344,7 +323,6 @@ function setupPrintHandlers() {
     }
   });
   
-  // Folder opening handler
   ipcMain.handle('openFolder', async (event, folderPath) => {
     try {
       // Ensure the folder exists
@@ -373,11 +351,11 @@ app.whenReady().then(async () => {
     // Set up window controls
     setupWindowControls();
 
-    // Set up print handlers
-    setupPrintHandlers();
-    
     // Set up database IPC handlers
     setupIpcHandlers();
+
+    // Set up thermal printing handlers
+    setupThermalPrintingHandlers(ipcMain, app);
 
     // Create the main window
     createMainWindow();
