@@ -1,5 +1,6 @@
-// src/services/ThermalPrintService.ts - Versión corregida
+// src/services/ThermalPrintService.ts - Fixed version
 import { PreviewSale } from '../types/sales';
+import { PrintInvoiceOptions } from '../types/printer';
 
 // Define types for thermal printer paper size
 export enum ThermalPaperSize {
@@ -32,7 +33,7 @@ const CHARACTER_SETS = {
  */
 export class ThermalPrintService {
   private static instance: ThermalPrintService;
-  private printerName: string | null = null;
+  private printerName: string | undefined = undefined;
   private paperSize: ThermalPaperSize = ThermalPaperSize.PAPER_80MM;
   
   // Private constructor for singleton pattern
@@ -58,7 +59,8 @@ export class ThermalPrintService {
         const settings = await window.api.getSettings();
         
         if (settings) {
-          this.printerName = settings.impresora_termica || null;
+          // Changed from null to undefined for TypeScript compatibility
+          this.printerName = settings.impresora_termica || undefined;
           
           // Set paper size based on configuration
           if (settings.tipo_impresora === 'termica58') {
@@ -419,6 +421,7 @@ export class ThermalPrintService {
    */
   public async printReceipt(sale: PreviewSale): Promise<{ success: boolean; message?: string }> {
     try {
+      // Check if API is available
       if (!window.api?.printInvoice) {
         throw new Error('Print API not available');
       }
@@ -430,9 +433,9 @@ export class ThermalPrintService {
       console.log(`Sending print job to ${this.printerName || 'default printer'}`);
       
       // Build thermal-optimized options
-      const printOptions = {
+      const printOptions: PrintInvoiceOptions = {
         html: htmlContent,
-        printerName: this.printerName || undefined,
+        printerName: this.printerName,
         silent: true,
         copies: 1,
         options: {
@@ -468,16 +471,18 @@ export class ThermalPrintService {
       
       // Create fallback print options with fewer properties that could fail
       try {
-        console.log("Attempting fallback print method...");
-        const fallbackOptions = {
-          html: this.generateThermalReceiptHTML(sale),
-          printerName: this.printerName,
-          silent: true
-        };
-        
-        const fallbackResult = await window.api.printInvoice(fallbackOptions);
-        if (fallbackResult && fallbackResult.success) {
-          return { success: true, message: "Print job sent successfully (fallback method)" };
+        if (window.api?.printInvoice) {
+          console.log("Attempting fallback print method...");
+          const fallbackOptions: PrintInvoiceOptions = {
+            html: this.generateThermalReceiptHTML(sale),
+            printerName: this.printerName,
+            silent: true
+          };
+          
+          const fallbackResult = await window.api.printInvoice(fallbackOptions);
+          if (fallbackResult && fallbackResult.success) {
+            return { success: true, message: "Print job sent successfully (fallback method)" };
+          }
         }
       } catch (fallbackError) {
         console.error("Fallback print method also failed:", fallbackError);
@@ -561,9 +566,9 @@ export class ThermalPrintService {
       `;
       
       // Simplified print options to minimize possible issues
-      const printOptions = {
+      const printOptions: PrintInvoiceOptions = {
         html: testHTML,
-        printerName: this.printerName || undefined,
+        printerName: this.printerName,
         silent: true,
         copies: 1,
         options: {

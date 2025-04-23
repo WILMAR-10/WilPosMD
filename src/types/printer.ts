@@ -1,7 +1,7 @@
 // src/types/printer.ts
 
-// Define interface for printer devices
-export interface Printer {
+  // Define interface for printer devices
+  export interface Printer {
     name: string;
     description?: string;
     status?: number;
@@ -38,7 +38,7 @@ export interface Printer {
   }
   
   // Interface for the API printInvoice method (matches preload.cjs expectations)
-  export interface PrintInvoiceRequest {
+  export interface PrintInvoiceOptions {
     html: string;
     printerName?: string;  // Note: This accepts undefined but not null
     silent?: boolean;

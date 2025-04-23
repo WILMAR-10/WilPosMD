@@ -1,15 +1,11 @@
-// thermal-printer.js - Para incorporar en main.js
-// Versión simplificada sin dependencias externas
-
-const { app, ipcMain, BrowserWindow } = require('electron');
-const fs = require('fs-extra');
-const path = require('path');
-const os = require('os');
-const { load } = require('cheerio'); // Asegúrate de instalarlo con npm install cheerio
+import { app, BrowserWindow, shell, ipcMain } from 'electron';
+import fs from 'fs-extra';
+import path from 'path';
+import os from 'os';
 
 /**
  * Gets available printers for the system
- * @param {WebContents} webContents - The webContents to get printers from
+ * @param {Electron.WebContents} webContents - The webContents to get printers from
  * @returns {Promise<Array>} List of available printers
  */
 export async function getPrinters(webContents) {
@@ -18,291 +14,311 @@ export async function getPrinters(webContents) {
     const printers = webContents.getPrinters();
     
     // Format printers list with additional info
-    return {
-      success: true,
-      printers: printers.map(printer => ({
-        name: printer.name,
-        displayName: printer.displayName || printer.name,
-        description: printer.description || '',
-        status: printer.status,
-        isDefault: printer.isDefault,
-        options: printer.options || {}
-      }))
-    };
+    return printers.map(printer => ({
+      name: printer.name,
+      displayName: printer.displayName || printer.name,
+      description: printer.description || '',
+      status: printer.status,
+      isDefault: printer.isDefault,
+      isThermal: isThermalPrinter(printer.name),
+      options: printer.options || {}
+    }));
   } catch (error) {
     console.error('Error getting printers:', error);
+    return [];
+  }
+}
+
+/**
+ * Determines if a printer is likely a thermal printer based on its name
+ * @param {string} printerName - The name of the printer to check
+ * @returns {boolean} Whether the printer is likely a thermal printer
+ */
+function isThermalPrinter(printerName) {
+  if (!printerName) return false;
+  
+  const name = printerName.toLowerCase();
+  return name.includes('thermal') || 
+         name.includes('receipt') || 
+         name.includes('pos') || 
+         name.includes('80mm') || 
+         name.includes('58mm');
+}
+
+/**
+ * Print using a separate window for thermal printing
+ * @param {Object} options - Print options
+ * @param {string} tempHtmlPath - Path to temporary HTML file
+ * @returns {Promise<Object>} Result of print operation
+ */
+export async function printWithThermalPrinter(options, tempHtmlPath) {
+  try {
+    // Create a window specifically for printing
+    const printWindow = new BrowserWindow({
+      show: false,
+      webPreferences: {
+        contextIsolation: true,
+        nodeIntegration: false
+      }
+    });
+    
+    // Load the HTML file
+    await printWindow.loadFile(tempHtmlPath);
+    
+    // Wait for load to complete
+    await new Promise(resolve => {
+      printWindow.webContents.on('did-finish-load', resolve);
+    });
+    
+    // Configure print options
+    const printOptions = {
+      silent: options.silent !== false,
+      printBackground: true,
+      deviceName: options.printerName || undefined,
+      copies: options.copies || 1,
+      margins: { marginType: 'none' }
+    };
+    
+    // If thermal printer, set custom page size
+    if (options.options?.thermalPrinter) {
+      const width = options.options.width || '80mm';
+      printOptions.pageSize = width === '58mm' 
+        ? { width: 58000, height: 210000 } // 58mm printer (in microns)
+        : { width: 80000, height: 210000 }; // 80mm printer (in microns)
+    }
+    
+    // Print the content
+    console.log('Printing with options:', printOptions);
+    const success = await printWindow.webContents.print(printOptions);
+    
+    // Clean up
+    printWindow.close();
+    
+    return { 
+      success,
+      message: success ? 'Print job sent successfully' : 'Failed to print'
+    };
+  } catch (error) {
+    console.error('Error in printWithThermalPrinter:', error);
+    return { success: false, error: error.message };
+  }
+}
+
+/**
+ * Print using Electron's standard print dialog
+ * @param {Electron.IpcMainInvokeEvent} event - IPC event 
+ * @param {Object} options - Print options
+ * @param {string} tempHtmlPath - Path to temporary HTML file
+ * @returns {Promise<Object>} Result of print operation
+ */
+export async function printWithElectron(event, options, tempHtmlPath) {
+  try {
+    // Create a window for printing
+    const printWindow = new BrowserWindow({
+      show: false,
+      webPreferences: {
+        contextIsolation: true,
+        nodeIntegration: false
+      }
+    });
+    
+    // Load the HTML file
+    await printWindow.loadFile(tempHtmlPath);
+    
+    // Wait for content to load
+    await new Promise(resolve => {
+      printWindow.webContents.on('did-finish-load', resolve);
+    });
+    
+    // Configure print options
+    const printOptions = {
+      silent: false, // Show print dialog
+      printBackground: true,
+      deviceName: options.printerName || undefined,
+      copies: options.copies || 1
+    };
+    
+    // Print the content
+    const success = await printWindow.webContents.print(printOptions);
+    
+    // Clean up
+    printWindow.close();
+    
+    return { 
+      success,
+      message: success ? 'Print job sent successfully' : 'Print canceled or failed'
+    };
+  } catch (error) {
+    console.error('Error in printWithElectron:', error);
+    return { success: false, error: error.message };
+  }
+}
+
+/**
+ * Generate PDF from HTML content
+ * @param {Object} options - PDF generation options
+ * @returns {Promise<Object>} Result of PDF generation
+ */
+export async function generatePDF(options) {
+  try {
+    if (!options?.html) {
+      throw new Error('HTML content required for PDF generation');
+    }
+    
+    if (!options.path) {
+      throw new Error('Destination path required for PDF');
+    }
+    
+    // Create directory if it doesn't exist
+    const dir = path.dirname(options.path);
+    await fs.ensureDir(dir);
+    
+    // Create temporary HTML file
+    const tempDir = path.join(os.tmpdir(), 'wilpos-pdf');
+    await fs.ensureDir(tempDir);
+    const tempHtmlPath = path.join(tempDir, `pdf-${Date.now()}.html`);
+    await fs.writeFile(tempHtmlPath, options.html);
+    
+    // Configure PDF options
+    const pdfOptions = {
+      printBackground: options.options?.printBackground !== false,
+      margins: options.options?.margins || {
+        top: 0.4,
+        bottom: 0.4,
+        left: 0.4,
+        right: 0.4
+      },
+      pageSize: options.options?.pageSize || 'A4'
+    };
+    
+    // Create hidden window for PDF generation
+    const pdfWindow = new BrowserWindow({
+      show: false,
+      webPreferences: {
+        contextIsolation: true,
+        nodeIntegration: false
+      }
+    });
+    
+    // Load HTML
+    await pdfWindow.loadFile(tempHtmlPath);
+    
+    // Generate PDF
+    console.log("Generating PDF...");
+    const pdfData = await pdfWindow.webContents.printToPDF(pdfOptions);
+    
+    // Save PDF
+    await fs.writeFile(options.path, pdfData);
+    console.log(`PDF saved to ${options.path}`);
+    
+    // Clean up
+    pdfWindow.close();
+    await fs.unlink(tempHtmlPath).catch(() => {});
+    
+    return {
+      success: true,
+      path: options.path
+    };
+    
+  } catch (error) {
+    console.error('Error generating PDF:', error);
     return {
       success: false,
-      error: error.message,
-      printers: []
+      error: `Error generating PDF: ${error.message}`
     };
   }
 }
 
 /**
- * Configura los manejadores IPC para impresoras térmicas sin usar node-thermal-printer
+ * Prepares a temporary HTML file for printing
+ * @param {string} html - HTML content
+ * @returns {Promise<string>} Path to temporary HTML file
  */
-function setupThermalPrinting() {
-  console.log("🖨️ Configurando soporte de impresión térmica...");
+export async function prepareHtmlFile(html) {
+  // Create temporary directory
+  const tempDir = path.join(os.tmpdir(), 'wilpos-printer');
+  await fs.ensureDir(tempDir);
+  
+  // Create temporary HTML file
+  const tempHtmlPath = path.join(tempDir, `print-${Date.now()}.html`);
+  await fs.writeFile(tempHtmlPath, html);
+  
+  return tempHtmlPath;
+}
 
-  // Manejador para obtener lista de impresoras
+/**
+ * Sets up IPC handlers for thermal printing
+ */
+export function setupThermalPrinting() {
+  console.log("🖨️ Setting up thermal printing support...");
+
+  // Handler for getting printer list
   ipcMain.handle('getPrinters', async (event) => {
     try {
-      console.log("Recuperando lista de impresoras...");
-      const webContents = event.sender;
-      let printers = [];
-      
-      // Intentar obtener impresoras a través de webContents
-      if (webContents && webContents.getPrinters) {
-        printers = webContents.getPrinters();
-        console.log(`Se encontraron ${printers.length} impresoras`);
-      } else if (webContents && webContents.getPrintersAsync) {
-        // Soporte para versiones nuevas de Electron
-        printers = await webContents.getPrintersAsync();
-        console.log(`Se encontraron ${printers.length} impresoras (async)`);
-      } else {
-        console.warn("No se pudo acceder a la API de impresoras");
-      }
-      
-      // Identificar impresoras térmicas por su nombre
-      const processedPrinters = printers.map(printer => {
-        const name = printer.name.toLowerCase();
-        const isThermal = name.includes('thermal') || 
-                         name.includes('receipt') || 
-                         name.includes('pos') || 
-                         name.includes('80mm') || 
-                         name.includes('58mm');
-        
-        return {
-          ...printer,
-          isThermal
-        };
-      });
-      
-      return processedPrinters;
+      console.log("Retrieving printer list...");
+      return await getPrinters(event.sender);
     } catch (error) {
-      console.error('Error al obtener impresoras:', error);
+      console.error('Error getting printers:', error);
       return [];
     }
   });
 
-  // Mejorar el manejador de impresión
+  // Handler for printing invoices
   ipcMain.handle('printInvoice', async (event, options) => {
     try {
-      console.log(`Solicitud de impresión recibida para impresora: ${options.printerName || 'predeterminada'}`);
+      console.log(`Print request received for printer: ${options.printerName || 'default'}`);
       
       if (!options?.html) {
-        throw new Error('Contenido HTML requerido para impresión');
+        throw new Error('HTML content required for printing');
       }
       
-      // Crear directorio temporal
-      const tempDir = path.join(os.tmpdir(), 'wilpos-printer');
-      await fs.ensureDir(tempDir);
+      // Create temporary HTML file
+      const tempHtmlPath = await prepareHtmlFile(options.html);
       
-      // Crear archivo HTML temporal
-      const tempHtmlPath = path.join(tempDir, `print-${Date.now()}.html`);
-      await fs.writeFile(tempHtmlPath, options.html);
+      // Print using thermal printer
+      const result = await printWithThermalPrinter(options, tempHtmlPath);
       
-      console.log(`Archivo de impresión creado en: ${tempHtmlPath}`);
-      
-      // Configurar opciones de impresión
-      const printOptions = {
-        silent: options.silent !== false,
-        printBackground: true,
-        deviceName: options.printerName || undefined,
-        copies: options.copies || 1,
-        margins: { 
-          marginType: 'none' 
-        },
-        pageSize: options.options?.pageSize || 'A4'
-      };
-      
-      // Configuraciones adicionales para impresora térmica
-      if (options.options?.thermalPrinter) {
-        // Establecer tamaño de papel según tipo de impresora térmica
-        if (options.options.width === '58mm') {
-          // Impresora térmica de 58mm
-          printOptions.pageSize = { 
-            width: 58000, // en microns
-            height: 210000 // altura predeterminada, se ajusta según contenido
-          };
-        } else {
-          // Impresora térmica de 80mm (caso predeterminado)
-          printOptions.pageSize = { 
-            width: 80000, // en microns
-            height: 210000 // altura predeterminada, se ajusta según contenido
-          };
-        }
-        
-        // Sin márgenes para impresoras térmicas
-        printOptions.margins = { marginType: 'none' };
-      }
-      
-      console.log("Opciones de impresión:", printOptions);
-      
-      // Crear una ventana oculta para cargar y imprimir el HTML
-      const printWindow = new BrowserWindow({
-        show: false,
-        webPreferences: {
-          contextIsolation: true,
-          nodeIntegration: false
-        }
-      });
-      
-      // Cargar el archivo HTML
-      await printWindow.loadFile(tempHtmlPath);
-      
-      // Esperar a que termine de cargar
-      await new Promise(resolve => {
-        printWindow.webContents.on('did-finish-load', resolve);
-      });
-      
-      // Imprimir el contenido
-      console.log("Enviando trabajo de impresión...");
-      const success = await printWindow.webContents.print(printOptions);
-      console.log(`Resultado de impresión: ${success ? "Éxito" : "Fallido"}`);
-      
-      // Limpiar
-      printWindow.close();
+      // Clean up
       await fs.unlink(tempHtmlPath).catch(() => {});
       
+      return result;
+    } catch (error) {
+      console.error('Error during printing:', error);
       return { 
-        success,
-        message: success ? "Impresión enviada correctamente" : "Falló la impresión"
+        success: false, 
+        error: `Print error: ${error.message}`,
+        needManualPrint: true
       };
-      
-    } catch (error) {
-      console.error('Error durante la impresión:', error);
-      
-      // Intentar con método alternativo si falla
-      try {
-        console.log("Intentando método alternativo de impresión...");
-        
-        const simplifiedOptions = {
-          silent: true,
-          deviceName: options.printerName || undefined
-        };
-        
-        const webContents = event.sender;
-        const success = await webContents.print(simplifiedOptions);
-        
-        return { 
-          success,
-          message: success ? "Impresión (alternativa) enviada correctamente" : "Falló la impresión alternativa"
-        };
-      } catch (fallbackError) {
-        console.error("Error en método alternativo:", fallbackError);
-        
-        return { 
-          success: false, 
-          error: `Error de impresión: ${error.message}`,
-          fallbackError: fallbackError.message,
-          needManualPrint: true
-        };
-      }
     }
   });
 
-  // Manejador para guardar como PDF
+  // Handler for saving as PDF
   ipcMain.handle('savePdf', async (event, options) => {
-    try {
-      console.log(`Solicitud para guardar PDF en: ${options.path}`);
-      
-      if (!options?.html) {
-        throw new Error('Contenido HTML requerido para PDF');
-      }
-      
-      if (!options.path) {
-        throw new Error('Ruta de destino requerida para PDF');
-      }
-      
-      // Crear directorio si no existe
-      const dir = path.dirname(options.path);
-      await fs.ensureDir(dir);
-      
-      // Crear archivo HTML temporal
-      const tempDir = path.join(os.tmpdir(), 'wilpos-pdf');
-      await fs.ensureDir(tempDir);
-      const tempHtmlPath = path.join(tempDir, `pdf-${Date.now()}.html`);
-      await fs.writeFile(tempHtmlPath, options.html);
-      
-      // Configurar opciones PDF
-      const pdfOptions = {
-        printBackground: options.options?.printBackground !== false,
-        margins: options.options?.margins || {
-          top: 0.4,
-          bottom: 0.4,
-          left: 0.4,
-          right: 0.4
-        },
-        pageSize: options.options?.pageSize || 'A4'
-      };
-      
-      // Crear ventana oculta para generar PDF
-      const pdfWindow = new BrowserWindow({
-        show: false,
-        webPreferences: {
-          contextIsolation: true,
-          nodeIntegration: false
-        }
-      });
-      
-      // Cargar HTML
-      await pdfWindow.loadFile(tempHtmlPath);
-      
-      // Generar PDF
-      console.log("Generando PDF...");
-      const pdfData = await pdfWindow.webContents.printToPDF(pdfOptions);
-      
-      // Guardar PDF
-      await fs.writeFile(options.path, pdfData);
-      console.log(`PDF guardado en ${options.path}`);
-      
-      // Limpiar
-      pdfWindow.close();
-      await fs.unlink(tempHtmlPath).catch(() => {});
-      
-      return {
-        success: true,
-        path: options.path
-      };
-      
-    } catch (error) {
-      console.error('Error al generar PDF:', error);
-      return {
-        success: false,
-        error: `Error al generar PDF: ${error.message}`
-      };
-    }
+    return await generatePDF(options);
   });
 
-  // Manejador para abrir carpetas
+  // Handler for opening folders
   ipcMain.handle('openFolder', async (event, folderPath) => {
     try {
       if (!folderPath) {
-        throw new Error('Ruta de carpeta requerida');
+        throw new Error('Folder path required');
       }
       
-      // Crear carpeta si no existe
+      // Create folder if it doesn't exist
       await fs.ensureDir(folderPath);
       
-      // Abrir carpeta con la aplicación predeterminada
+      // Open folder with default application
       const opened = await shell.openPath(folderPath);
       
       if (opened !== '') {
-        console.error(`Error abriendo carpeta: ${opened}`);
+        console.error(`Error opening folder: ${opened}`);
         return false;
       }
       
       return true;
     } catch (error) {
-      console.error('Error abriendo carpeta:', error);
+      console.error('Error opening folder:', error);
       return false;
     }
   });
 }
-
-// Exportar la función para usar en main.js
-module.exports = {
-  setupThermalPrinting
-};
