@@ -138,7 +138,7 @@ export class ThermalPrintService {
         
         return {
           available: false,
-          message: `Configured printer "${this.printerName}" not found. No thermal printers detected.`
+          message: `No se encontró impresora térmica. Usando impresora "${this.printerName}" como alternativa.`
         };
       }
       
@@ -160,7 +160,7 @@ export class ThermalPrintService {
         return { 
           available: true, 
           printerName: printer.name,
-          message: `Automatically selected thermal printer: "${printer.name}"`
+          message: `Se detectó automáticamente la impresora térmica: "${this.printerName}"`
         };
       }
       
@@ -186,60 +186,15 @@ export class ThermalPrintService {
   }
   
   /**
-   * Get all available printers
-   * @returns List of available printers with thermal indicator
+   * Get all available printers via the unified preload API
    */
-  public async getAllPrinters(): Promise<{ 
-    printers: Array<{ 
-      name: string; 
-      description?: string; 
-      isDefault?: boolean; 
-      isThermal?: boolean 
-    }> 
-  }> {
+  public async getAllPrinters(): Promise<{ printers: PrinterInfo[] }> {
     try {
-      let printers: any[] = [];
-      
-      // Try electronPrinting first if available
-      if (window.electronPrinting?.getPrinters) {
-        try {
-          printers = await window.electronPrinting.getPrinters();
-          console.log("Got printers via electronPrinting:", printers);
-        } catch (error) {
-          console.warn('Error getting printers with electronPrinting:', error);
-        }
-      }
-      
-      // If no printers found yet, try with window.api
-      if (printers.length === 0 && window.api?.getPrinters) {
-        try {
-          printers = await window.api.getPrinters();
-          console.log("Got printers via window.api:", printers);
-        } catch (error) {
-          console.warn('Error getting printers with window.api:', error);
-        }
-      }
-      
-      // Detect which printers are likely thermal
-      const formattedPrinters = printers.map(p => {
-        const name = p.name.toLowerCase();
-        const isThermal = name.includes('thermal') || 
-                         name.includes('receipt') || 
-                         name.includes('pos') || 
-                         name.includes('80mm') || 
-                         name.includes('58mm');
-        
-        return {
-          name: p.name,
-          description: p.description,
-          isDefault: p.isDefault,
-          isThermal
-        };
-      });
-      
-      return { printers: formattedPrinters };
+      const res = await window.printerApi.getPrinters();
+      if (!res.success) throw new Error(res.error);
+      return { printers: res.printers };
     } catch (error) {
-      console.error('Error getting all printers:', error);
+      console.warn('Error getting printers via printerApi:', error);
       return { printers: [] };
     }
   }
@@ -346,7 +301,7 @@ export class ThermalPrintService {
               <tr>
                 <td>${item.quantity}</td>
                 <td>${item.name.substring(0, 15)}${item.name.length > 15 ? '...' : ''}</td>
-                <td class="right">RD$${item.price.toFixed(2)}</td>
+                <td class="right">RD${item.price.toFixed(2)}</td>
                 <td class="right">RD$${item.subtotal.toFixed(2)}</td>
               </tr>
             `).join('')}
@@ -416,185 +371,44 @@ export class ThermalPrintService {
   }
   
   /**
-   * Print a receipt directly to the printer using the Web API
-   * Instead of relying on node-thermal-printer which causes problems
+   * Print a receipt directly to the thermal printer
    */
-  public async printReceipt(sale: PreviewSale): Promise<{ success: boolean; message?: string }> {
+  public async printReceipt(
+    sale: PreviewSale
+  ): Promise<{ success: boolean; message?: string }> {
     try {
-      // Check if API is available
-      if (!window.api?.printInvoice) {
-        throw new Error('Print API not available');
-      }
-      
-      // Generate HTML content
-      const htmlContent = this.generateThermalReceiptHTML(sale);
-      
-      // Direct printing via the electron-based window.api
-      console.log(`Sending print job to ${this.printerName || 'default printer'}`);
-      
-      // Build thermal-optimized options
-      const printOptions: PrintInvoiceOptions = {
-        html: htmlContent,
+      const html = this.generateThermalReceiptHTML(sale);
+      const opts = {
+        html,
         printerName: this.printerName,
         silent: true,
-        copies: 1,
         options: {
-          // Mark as thermal printer for special handling in main process
           thermalPrinter: true,
-          width: this.paperSize,
-          // Simplified options to avoid undefined properties
-          paperWidth: this.paperSize,
-          printSpeed: this.paperSize === ThermalPaperSize.PAPER_58MM ? '58mm' : '80mm',
-          fontSize: '12pt',
-          scaleFactor: 100,
-          printBackground: true,
-          margins: { 
-            marginType: 'custom',
-            top: 0,
-            bottom: 0,
-            left: 0,
-            right: 0
-          }
+          pageSize: this.paperSize
         }
       };
-      
-      // Send print job using the main process API
-      const result = await window.api.printInvoice(printOptions);
-      
-      if (result && result.success) {
-        return { success: true, message: "Print job sent successfully" };
-      } else {
-        throw new Error(result?.error || 'Unknown printing error');
-      }
-    } catch (error) {
+      const result = await window.printerApi.print(opts);
+      if (!result.success) throw new Error(result.error);
+      return { success: true };
+    } catch (error: any) {
       console.error('Error printing receipt:', error);
-      
-      // Create fallback print options with fewer properties that could fail
-      try {
-        if (window.api?.printInvoice) {
-          console.log("Attempting fallback print method...");
-          const fallbackOptions: PrintInvoiceOptions = {
-            html: this.generateThermalReceiptHTML(sale),
-            printerName: this.printerName,
-            silent: true
-          };
-          
-          const fallbackResult = await window.api.printInvoice(fallbackOptions);
-          if (fallbackResult && fallbackResult.success) {
-            return { success: true, message: "Print job sent successfully (fallback method)" };
-          }
-        }
-      } catch (fallbackError) {
-        console.error("Fallback print method also failed:", fallbackError);
-      }
-      
-      return { 
-        success: false, 
-        message: error instanceof Error ? error.message : 'Unknown printing error'
-      };
+      return { success: false, message: error.message };
     }
   }
   
   /**
    * Test the thermal printer with a simplified test page
-   * @returns Result of the test print
    */
   public async testPrinter(): Promise<{ success: boolean; message: string }> {
     try {
-      if (!window.api?.printInvoice) {
-        throw new Error('Print API not available');
-      }
-      
-      // Create a simple but complete test HTML without complex structures
-      const testHTML = `
-        <!DOCTYPE html>
-        <html>
-        <head>
-          <meta charset="UTF-8">
-          <title>Test Print</title>
-          <style>
-            body {
-              font-family: Arial, sans-serif;
-              width: ${this.paperSize === ThermalPaperSize.PAPER_58MM ? '48mm' : '72mm'};
-              padding: 5mm;
-              text-align: center;
-            }
-            .title {
-              font-size: 12pt;
-              font-weight: bold;
-            }
-            .subtitle {
-              font-size: 10pt;
-              margin: 5mm 0;
-            }
-            .test-text {
-              font-size: 9pt;
-              margin: 2mm 0;
-              text-align: left;
-            }
-            .footer {
-              margin-top: 5mm;
-              font-size: 8pt;
-              border-top: 1px dashed #000;
-              padding-top: 2mm;
-            }
-          </style>
-        </head>
-        <body>
-          <div class="title">WILPOS</div>
-          <div class="subtitle">*** TEST DE IMPRESIÓN ***</div>
-          
-          <div class="test-text">
-            Impresora: ${this.printerName || 'Default'}<br>
-            Tamaño: ${this.paperSize}<br>
-            Fecha: ${new Date().toLocaleString()}<br>
-          </div>
-          
-          <div style="border: 1px dashed #000; margin: 3mm 0; padding: 2mm;">
-            ABCDEFGHIJKLMNOPQRSTUVWXYZ<br>
-            abcdefghijklmnopqrstuvwxyz<br>
-            0123456789<br>
-            !@#$%^&*()-_=+[]{}|;:'\",.<>/?
-          </div>
-          
-          <div class="footer">
-            Si puede leer este texto, la impresora<br>
-            está funcionando correctamente.
-          </div>
-        </body>
-        </html>
-      `;
-      
-      // Simplified print options to minimize possible issues
-      const printOptions: PrintInvoiceOptions = {
-        html: testHTML,
-        printerName: this.printerName,
-        silent: true,
-        copies: 1,
-        options: {
-          thermal: true,
-          width: this.paperSize
-        }
-      };
-      
-      console.log(`Sending test print to ${this.printerName || 'default printer'}`);
-      
-      const result = await window.api.printInvoice(printOptions);
-      
-      if (result && result.success) {
-        return { 
-          success: true, 
-          message: `Test print sent successfully to ${this.printerName || 'default printer'}`
-        };
-      } else {
-        throw new Error(result?.error || 'Unknown printing error');
-      }
-    } catch (error) {
+      const html = `<html><body><h1>Test</h1></body></html>`;
+      const opts = { html, printerName: this.printerName, silent: true, options: { thermalPrinter: true, pageSize: this.paperSize } };
+      const res = await window.printerApi.print(opts);
+      if (!res.success) throw new Error(res.error);
+      return { success: true, message: 'Test print sent successfully' };
+    } catch (error: any) {
       console.error('Error sending test print:', error);
-      return { 
-        success: false, 
-        message: error instanceof Error ? error.message : 'Unknown printing error'
-      };
+      return { success: false, message: error.message };
     }
   }
 }

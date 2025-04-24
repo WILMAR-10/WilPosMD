@@ -82,49 +82,6 @@ contextBridge.exposeInMainWorld('api', {
   login: (credentials) => ipcRenderer.invoke('login', credentials),
   logout: () => ipcRenderer.invoke('logout'),
   
-  // PDF and printer methods (Improved error handling)
-  printInvoice: wrapApiMethod(async (options) => {
-    // Validación básica de parámetros
-    if (!options || typeof options !== 'object') {
-      return { success: false, error: 'Parámetros de impresión inválidos' };
-    }
-    
-    if (!options.html || typeof options.html !== 'string') {
-      return { success: false, error: 'Contenido HTML requerido' };
-    }
-    
-    // Sanear las opciones antes de enviarlas
-    const printOptions = {
-      html: options.html,
-      printerName: options.printerName || undefined,
-      silent: options.silent !== undefined ? options.silent : true,
-      copies: options.copies || 1,
-      options: {
-        // Opciones para impresora térmica
-        thermalPrinter: options.options?.thermalPrinter || false,
-        pageSize: options.options?.pageSize || 'A4',
-        width: options.options?.width || '80mm',
-        ...options.options
-      }
-    };
-    
-    console.log('Enviando solicitud de impresión con:', {
-      printerName: printOptions.printerName, 
-      silent: printOptions.silent,
-      thermalPrinter: printOptions.options.thermalPrinter
-    });
-    
-    // Enviar petición al proceso principal
-    const result = await ipcRenderer.invoke('printInvoice', printOptions);
-    console.log('Resultado de impresión:', result);
-    
-    return result;
-  }, 'printInvoice'),
-  
-  savePdf: wrapApiMethod(async ({ html, path, options }) => {
-    return await ipcRenderer.invoke('savePdf', { html, path, options });
-  }, 'savePdf'),
-  
   // File/folder management
   openFolder: wrapApiMethod(async (folderPath) => {
     return await ipcRenderer.invoke('openFolder', folderPath);
@@ -151,33 +108,7 @@ contextBridge.exposeInMainWorld('api', {
   
   broadcastSyncEvent: (event) => {
     ipcRenderer.send('broadcast-sync-event', event);
-  },
-  
-  // === NUEVA API: getPrinters ===
-  getPrinters: wrapApiMethod(async () => {
-    try {
-      console.log('Solicitando impresoras al proceso principal');
-      const printers = await ipcRenderer.invoke('getPrinters');
-      return printers;
-    } catch (error) {
-      console.error('Error obteniendo impresoras:', error);
-      // Si falla, intentar obtener impresoras desde webContents directamente
-      const wc = require('electron').webContents.getFocusedWebContents();
-      if (wc && wc.getPrinters) {
-        const printers = wc.getPrinters();
-        console.log('Impresoras obtenidas directamente:', printers);
-        return printers.map(p => ({
-          ...p,
-          isThermal: p.name.toLowerCase().includes('thermal') || 
-                    p.name.toLowerCase().includes('receipt') || 
-                    p.name.toLowerCase().includes('pos') || 
-                    p.name.toLowerCase().includes('80mm') || 
-                    p.name.toLowerCase().includes('58mm')
-        }));
-      }
-      throw error;
-    }
-  }, 'getPrinters')
+  }
 });
 
 // Expose app state management
@@ -188,67 +119,47 @@ contextBridge.exposeInMainWorld('electron', {
   }
 });
 
-// Expose print functionality with improved error handling
-contextBridge.exposeInMainWorld('electronPrinting', {
+// Replace both the api.getPrinters and electronPrinter implementations with this
+contextBridge.exposeInMainWorld('printerApi', {
   getPrinters: wrapApiMethod(async () => {
-    // Intentar primero a través de ipcRenderer
     try {
-      const printers = await ipcRenderer.invoke('getPrinters');
-      
-      // Detectar impresoras térmicas
-      return printers.map(printer => {
-        const name = printer.name.toLowerCase();
-        const isThermal = name.includes('thermal') || 
-                          name.includes('receipt') || 
-                          name.includes('pos') || 
-                          name.includes('80mm') || 
-                          name.includes('58mm');
-        
-        return {
-          ...printer,
-          isThermal
-        };
-      });
+      const result = await ipcRenderer.invoke('get-printers');
+      console.log('Printers retrieved:', result);
+      return result;
     } catch (error) {
-      console.error('Error al obtener impresoras mediante IPC:', error);
-      
-      // Plan B: Usar webContents directamente
-      try {
-        const printers = [];
-        const webContents = require('electron').webContents.getFocusedWebContents();
-        
-        if (webContents) {
-          if (webContents.getPrinters) {
-            // Electron ≥ 12
-            const systemPrinters = webContents.getPrinters();
-            printers.push(...systemPrinters);
-          }
-        }
-        
-        // Identificar impresoras térmicas
-        return printers.map(printer => {
-          const name = printer.name.toLowerCase();
-          const isThermal = name.includes('thermal') || 
-                            name.includes('receipt') || 
-                            name.includes('pos') || 
-                            name.includes('80mm') || 
-                            name.includes('58mm');
-          
-          return {
-            ...printer,
-            isThermal
-          };
-        });
-      } catch (directError) {
-        console.error('Error al obtener impresoras directamente:', directError);
-        
-        // Plan C: Retornar un array vacío para no romper nada
-        return [];
-      }
+      console.error('Failed to get printers:', error);
+      throw error; // Will be caught by wrapApiMethod
     }
-  }, 'electronPrinting.getPrinters'),
+  }, 'getPrinters'),
   
-  printInvoice: wrapApiMethod(async (options) => {
-    return await ipcRenderer.invoke('printInvoice', options);
-  }, 'electronPrinting.printInvoice')
+  print: wrapApiMethod(async (options) => {
+    // Validate options
+    if (!options || !options.html) {
+      return { 
+        success: false, 
+        error: 'Invalid print options: html content is required' 
+      };
+    }
+    
+    console.log('Sending print request:', {
+      printer: options.printerName || 'default',
+      silent: options.silent,
+      thermal: options.options?.thermalPrinter
+    });
+    
+    return await ipcRenderer.invoke('print', options);
+  }, 'print'),
+  
+  savePdf: wrapApiMethod(async (options) => {
+    // Validate options
+    if (!options || !options.html || !options.path) {
+      return { 
+        success: false, 
+        error: 'Invalid PDF options: html and path are required' 
+      };
+    }
+    
+    console.log('Saving PDF to:', options.path);
+    return await ipcRenderer.invoke('savePdf', options);
+  }, 'savePdf')
 });

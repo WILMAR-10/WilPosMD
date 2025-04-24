@@ -150,10 +150,49 @@ interface ElectronPrinting {
   // Add any other methods that electronPrinting may have
 }
 
+interface ElectronPrinter {
+  getPrinters: () => Promise<Array<{
+    name: string;
+    description?: string;
+    isDefault?: boolean;
+    isThermal?: boolean;
+  }>>;
+  print: (options: PrintOptions) => Promise<{ success: boolean; error?: string }>;
+}
+
+export enum PrinterType {
+  STANDARD = 'normal',
+  THERMAL_80MM = 'termica',
+  THERMAL_58MM = 'termica58'
+}
+
+export interface PrintOptions {
+  printerName?: string;
+  silent?: boolean;
+  copies?: number;
+}
+
+export interface SavePdfOptions {
+  directory: string;
+  filename?: string;
+  overwrite?: boolean;
+}
+
+export interface PrinterInfo {
+  name: string;
+  description?: string;
+  isDefault?: boolean;
+  isThermal?: boolean;
+}
+
 declare global {
   interface Window {
+    electronPrinter: ElectronPrinter;
     electronPrinting?: ElectronPrinting;
     api?: {
+
+      getSettings?: () => Promise<any>;
+
       // Window controls
       openFolder: (folderPath: string) => Promise<boolean>;
       minimize: () => Promise<boolean>;
@@ -267,7 +306,11 @@ declare global {
       unregisterSyncListener: () => void,
       broadcastSyncEvent: (event: SyncEvent) => void,
     };
-    
+    printerApi: {
+      getPrinters: () => Promise<{ success: boolean; printers: PrinterInfo[]; error?: string }>;
+      print: (opts: any) => Promise<{ success: boolean; error?: string }>;
+      savePdf: (opts: any) => Promise<{ success: boolean; path?: string; error?: string }>;
+    };
     electron?: {
       app: {
         getState: () => Promise<any>;

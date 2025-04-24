@@ -57,6 +57,22 @@ console.log("📂 App Path:", __dirname);
 console.log("🔧 Dev Mode:", isDev);
 
 // =====================================================
+// Utility Functions
+// =====================================================
+
+function safeHandle(channel, handler) {
+  try {
+    // Always attempt to remove any existing handler
+    ipcMain.removeHandler(channel);
+  } catch (error) {
+    // If no handler exists, that's fine - we'll register a new one
+    console.log(`No existing handler found for ${channel}`);
+  }
+  // Register the new handler
+  ipcMain.handle(channel, handler);
+}
+
+// =====================================================
 // Window Management
 // =====================================================
 
@@ -254,90 +270,15 @@ function createMainWindow() {
 // Printing and PDF Handlers
 // =====================================================
 
-function setupPrintHandlers() {
-  // Keep these handlers as they don't conflict
-  ipcMain.handle('getPrinters', async (event) => {
-    return await getPrinters(event.sender);
-  });
+ipcMain.handle('get-printers', () => getPrinters());
 
-  ipcMain.handle('savePdf', async (event, options) => {
-    try {
-      if (!options.html || !options.path) {
-        throw new Error('Missing required parameters: html and path');
-      }
-      
-      // Create a directory for the PDF if it doesn't exist
-      const pdfDir = dirname(options.path);
-      await fs.ensureDir(pdfDir);
-      
-      // Create a temporary HTML file
-      const tempDir = join(app.getPath('temp'), 'wilpos-pdf');
-      await fs.ensureDir(tempDir);
-      const tempHtmlPath = join(tempDir, `pdf-${Date.now()}.html`);
-      await fs.writeFile(tempHtmlPath, options.html);
-      
-      // Create a BrowserWindow to load the HTML
-      const pdfWindow = new BrowserWindow({
-        show: false,
-        webPreferences: {
-          contextIsolation: true,
-          nodeIntegration: false
-        }
-      });
-      
-      // Load the HTML file
-      await pdfWindow.loadFile(tempHtmlPath);
-      
-      // Configure PDF options
-      const pdfOptions = {
-        printBackground: options.options?.printBackground !== false,
-        margins: options.options?.margins || {
-          top: 0.4,
-          bottom: 0.4,
-          left: 0.4,
-          right: 0.4
-        },
-        pageSize: options.options?.pageSize || 'A4'
-      };
-      
-      // Generate the PDF
-      const pdfData = await pdfWindow.webContents.printToPDF(pdfOptions);
-      
-      // Write the PDF to the file system
-      await fs.writeFile(options.path, pdfData);
-      
-      // Clean up
-      pdfWindow.close();
-      await fs.unlink(tempHtmlPath).catch(() => {});
-      
-      return {
-        success: true,
-        path: options.path
-      };
-    } catch (error) {
-      console.error('savePdf error:', error);
-      return {
-        success: false,
-        error: error.message
-      };
-    }
-  });
-  
-  ipcMain.handle('openFolder', async (event, folderPath) => {
-    try {
-      // Ensure the folder exists
-      await fs.ensureDir(folderPath);
-      
-      // Open the folder with the default file manager
-      await shell.openPath(folderPath);
-      
-      return true;
-    } catch (error) {
-      console.error('openFolder error:', error);
-      return false;
-    }
-  });
-}
+ipcMain.handle('print', async (_, options) => {
+  return await printWithThermalPrinter(options);
+});
+
+ipcMain.handle('savePdf', async (_, options) => {
+  return await savePdfHandler(options);
+});
 
 // =====================================================
 // Application Lifecycle

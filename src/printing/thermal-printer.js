@@ -5,13 +5,17 @@ import os from 'os';
 
 /**
  * Gets available printers for the system
- * @param {Electron.WebContents} webContents - The webContents to get printers from
  * @returns {Promise<Object>} List of available printers
  */
-export async function getPrinters(webContents) {
+export async function getPrinters() {
   try {
-    // Get printers using Electron's API
-    const printers = webContents.getPrinters();
+    const allWindows = BrowserWindow.getAllWindows();
+    if (allWindows.length === 0) {
+      throw new Error('No windows available to get printers');
+    }
+    
+    const mainWindow = allWindows[0];
+    const printers = mainWindow.webContents.getPrinters();
     
     // Format printers list with additional info
     return {
@@ -141,12 +145,12 @@ export async function printWithThermalPrinter(options, tempHtmlPath) {
 
 /**
  * Print using Electron's standard print dialog
- * @param {Electron.IpcMainInvokeEvent} event - IPC event 
  * @param {Object} options - Print options
  * @param {string} tempHtmlPath - Path to temporary HTML file
  * @returns {Promise<Object>} Result of print operation
  */
-export async function printWithElectron(event, options, tempHtmlPath) {
+export async function printWithElectron(options, tempHtmlPath) {
+  // After: Simplified signature
   try {
     // Create a window for printing
     const printWindow = new BrowserWindow({
@@ -225,7 +229,7 @@ export function setupThermalPrintingHandlers(ipcMain, app) {
       if (options.options?.thermalPrinter) {
         result = await printWithThermalPrinter(options, tempHtmlPath);
       } else {
-        result = await printWithElectron(event, options, tempHtmlPath);
+        result = await printWithElectron(options, tempHtmlPath);
       }
       
       // Clean up temp file after printing
@@ -244,7 +248,7 @@ export function setupThermalPrintingHandlers(ipcMain, app) {
   // Handler for getting printers
   ipcMain.handle('getPrinters', async (event) => {
     console.log("Getting printer list...");
-    return getPrinters(event.sender);
+    return getPrinters();
   });
 
   // Handler for PDF generation
