@@ -1,7 +1,7 @@
 ﻿// Caja.tsx
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import PrinterService from '../services/PrinterService';
 import ThermalPrintService, { ThermalPaperSize } from '../services/ThermalPrintService';
+import InvoiceManager from '../services/InvoiceManager';
 import { 
   ShoppingCart, Search, Package, DollarSign, User, 
   Trash2, Plus, Minus, X, CreditCard, Wallet, ChevronLeft,
@@ -15,7 +15,6 @@ import FacturaViewer from '../components/FacturaViewer';
 import Badge from '../components/Badge';
 import { Sale, SaleDetail, SaleResponse, ApiResponse } from '../types/sales';
 import { broadcastSyncEvent } from '../services/SyncService';
-import InvoiceManager from '../services/InvoiceManager';
 
 // Tipo de método de pago
 type PaymentMethod = 'Efectivo' | 'Tarjeta' | 'Transferencia';
@@ -73,9 +72,8 @@ interface SaleApiResponse {
 }
 
 const Caja: React.FC = () => {
-  const printerService = PrinterService.getInstance();
-  const invoiceManager = InvoiceManager.getInstance();
   const thermalPrintService = ThermalPrintService.getInstance();
+  const invoiceManager = InvoiceManager.getInstance();
 
   const [printerStatus, setPrinterStatus] = useState<{
     available: boolean;
@@ -541,31 +539,16 @@ const Caja: React.FC = () => {
             }))
           });
 
-          // Print receipt if enabled (handle errors gracefully)
-          if (printAfterSale) {
+          // Print receipt if enabled
+          if (printAfterSale && previewSale) {
             try {
-              console.log("About to print, sale data:", {
-                id: result.id,
-                hasPreviewSale: !!previewSale,
-                previewId: previewSale?.id
-              });
-
-              // Wait for state update to complete before printing
-              setTimeout(() => {
-                if (previewSale) {
-                  handlePrint();
-                } else {
-                  console.error("previewSale is null after timeout");
-                }
-              }, 1000);
+              const thermalService = ThermalPrintService.getInstance();
+              const printResult = await thermalService.printReceipt(previewSale);
+              if (!printResult.success) {
+                console.warn('Advertencia al imprimir:', printResult.message);
+              }
             } catch (printError) {
               console.error('Error al imprimir:', printError);
-              setAlert({
-                type: 'warning',
-                message: `Venta exitosa, pero hubo un problema al imprimir: ${
-                  printError instanceof Error ? printError.message : 'Error desconocido'
-                }`
-              });
             }
           }
 
@@ -649,7 +632,7 @@ const Caja: React.FC = () => {
     }
   };
 
-  // Manejo de impresión manual
+  // Manejo de impresión manual simplificado
   async function handlePrint() {
     if (!previewSale) {
       if (cart.length > 0) {
@@ -658,7 +641,7 @@ const Caja: React.FC = () => {
         const tempPreview: PreviewSale = {
           cliente_id: selectedCustomer,
           cliente: customerName,
-          total: total, descuento: discount, impuestos: taxAmount,
+          total, descuento: discount, impuestos: taxAmount,
           metodo_pago: paymentMethod, estado: 'Pendiente',
           fecha_venta: new Date().toISOString(),
           usuario_id: user?.id, usuario: user?.nombre || 'Usuario',
@@ -667,34 +650,46 @@ const Caja: React.FC = () => {
         };
         setIsSubmitting(true);
         try {
-          const result = await thermalPrintService.printReceipt(tempPreview);
+          const thermalService = ThermalPrintService.getInstance();
+          const result = await thermalService.printReceipt(tempPreview);
           if (result.success) {
             setAlert({ type: 'success', message: 'Borrador de recibo enviado a la impresora' });
           } else {
-            setAlert({ type: 'error', message: `Error al imprimir: ${result.message || 'Error desconocido'}` });
+            throw new Error(result.message || 'Error al imprimir');
           }
-        } catch (err: any) {
-          setAlert({ type: 'error', message: `Error de impresión: ${err.message}` });
+        } catch (err) {
+          setAlert({
+            type: 'error',
+            message: `Error de impresión: ${err instanceof Error ? err.message : String(err)}`
+          });
           console.error('Print error:', err);
         } finally {
           setIsSubmitting(false);
         }
       } else {
-        setAlert({ type: 'error', message: 'No hay recibo para imprimir. Agregue productos al carrito primero.' });
+        setAlert({
+          type: 'error',
+          message: 'No hay recibo para imprimir. Agregue productos al carrito primero.'
+        });
       }
       return;
     }
 
+    // Imprimir si hay una venta previsualizada
     setIsSubmitting(true);
     try {
-      const result = await thermalPrintService.printReceipt(previewSale);
+      const thermalService = ThermalPrintService.getInstance();
+      const result = await thermalService.printReceipt(previewSale);
       if (result.success) {
         setAlert({ type: 'success', message: 'Recibo enviado a la impresora térmica' });
       } else {
-        setAlert({ type: 'error', message: `Error al imprimir: ${result.message || 'Error desconocido'}` });
+        throw new Error(result.message || 'Error al imprimir');
       }
-    } catch (err: any) {
-      setAlert({ type: 'error', message: `Error de impresión: ${err.message}` });
+    } catch (err) {
+      setAlert({
+        type: 'error',
+        message: `Error de impresión: ${err instanceof Error ? err.message : String(err)}`
+      });
       console.error('Print error:', err);
     } finally {
       setIsSubmitting(false);

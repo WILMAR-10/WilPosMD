@@ -1,78 +1,33 @@
-// src/services/InvoiceManager.ts - Versión con tipos corregidos
+// src/services/InvoiceManager.ts - Versión simplificada
 import { PreviewSale } from '../types/sales';
-import { PrintInvoiceRequest, SavePdfResult } from '../types/printer';
+import { PrintResult } from './ThermalPrintService';
+import ThermalPrintService from './ThermalPrintService';
 
-// Interfaz para impresoras
-export interface Printer {
-  name: string;
-  displayName?: string;
-  description?: string;
-  status?: number;
-  isDefault?: boolean;
-}
-
-// Interfaces mejoradas para opciones de impresión
+// Interfaz para opciones de impresión
 export interface PrintOptions {
-  silent: boolean;      // Impresión sin diálogo de confirmación
-  printerName?: string; // Impresora específica a usar
-  copies?: number;      // Número de copias
-  printBackground?: boolean; // Imprimir gráficos y colores de fondo
-  options?: {          // Opciones adicionales específicas para la impresora
-    paperWidth?: string;
-    printSpeed?: string;
-    fontSize?: string;
-    [key: string]: any;
-  };
-}
-
-// Interfaces para opciones de guardado PDF
-export interface SavePdfOptions {
-  directory: string;    // Directorio donde guardar
-  filename?: string;    // Nombre de archivo personalizado
-  overwrite?: boolean;  // Sobrescribir si existe
-}
-
-// Interfaces para las opciones de API
-interface PrintInvoiceOptions {
-  html: string;
-  printerName?: string;
   silent?: boolean;
+  printerName?: string;
   copies?: number;
-  options?: {
-    paperWidth?: string;
-    printSpeed?: string;
-    fontSize?: string;
-    [key: string]: any;
-  };
 }
 
-// Interfaces para los resultados de las operaciones de la API
-interface PrintInvoiceResult {
-  success: boolean;
-  error?: string;
-  needManualPrint?: boolean;
+// Interfaz para opciones de PDF
+export interface SavePdfOptions {
+  directory: string;
+  filename?: string;
+  overwrite?: boolean;
 }
 
+/**
+ * Servicio unificado para manejo de facturas, impresión y PDF
+ * Actúa como fachada (patrón Facade) para servicios subyacentes
+ */
 export class InvoiceManager {
-  // Instancia singleton
   private static instance: InvoiceManager;
+  private thermalPrintService: ThermalPrintService;
   
-  // Opciones predeterminadas
-  private defaultPrintOptions: PrintOptions = {
-    silent: true,
-    copies: 1,
-    printBackground: true
-  };
-  
-  private defaultSaveOptions: SavePdfOptions = {
-    directory: '',
-    overwrite: true
-  };
-  
-  // Constructor privado para patrón singleton
+  // Constructor privado
   private constructor() {
-    // Inicializar valores predeterminados desde la configuración
-    this.loadSettings();
+    this.thermalPrintService = ThermalPrintService.getInstance();
   }
   
   // Obtener instancia singleton
@@ -83,202 +38,108 @@ export class InvoiceManager {
     return InvoiceManager.instance;
   }
   
-  // Cargar configuración
-  private async loadSettings(): Promise<void> {
-    try {
-      if (window.api?.getSettings) {
-        const settings = await window.api.getSettings();
-        
-        // Actualizar opciones de impresión desde configuración
-        if (settings) {
-          this.defaultPrintOptions.printerName = settings.impresora_termica;
-          
-          // Actualizar directorio para guardar PDF
-          if (settings.guardar_pdf && settings.ruta_pdf) {
-            this.defaultSaveOptions.directory = settings.ruta_pdf;
-          } else if (window.api.getAppPaths) {
-            // Alternativa: usar carpeta de documentos
-            try {
-              const paths = await window.api.getAppPaths();
-              this.defaultSaveOptions.directory = paths.documents + '/WilPOS/Facturas';
-            } catch (pathError) {
-              console.error('Error obteniendo rutas de app:', pathError);
-            }
-          }
-        }
-      }
-    } catch (error) {
-      console.error('Error cargando configuración de facturas:', error);
-    }
-  }
-  
-  // Imprimir factura - Método actualizado para manejar fallbacks de impresoras
+  /**
+   * Imprime una factura
+   * @param sale Datos de la venta
+   * @param htmlContent Contenido HTML (opcional)
+   * @param options Opciones de impresión
+   * @returns Resultado de la operación
+   */
   public async printInvoice(
     sale: PreviewSale,
-    htmlContent: string,
-    options?: { silent?: boolean; printerName?: string; copies?: number; printOptions?: Record<string, any> }
+    htmlContent?: string,
+    options?: PrintOptions
   ): Promise<boolean> {
     try {
-      if (!window.api || !window.api.printInvoice) {
+      // Verificar si la API está disponible
+      if (!window.api?.printInvoice && !window.printerApi?.print) {
         console.error('API de impresión no disponible');
         return false;
       }
       
-      // Log the printer being used
-      console.log('Intentando imprimir con:', 
-        options?.printerName || this.defaultPrintOptions.printerName || 'Impresora predeterminada del sistema');
-      
-      // Fetch available printers for fallback logic
-      let availablePrinters: Printer[] = [];
-      try {
-        if (window.api.getPrinters) {
-          availablePrinters = await window.api.getPrinters();
-          console.log('Impresoras disponibles:', availablePrinters.map(p => p.name));
-        }
-      } catch (error) {
-        console.warn('No se pudo obtener lista de impresoras:', error);
-      }
-      
-      // Use the provided printer name, or find a default one from available printers
-      let effectivePrinterName = options?.printerName || this.defaultPrintOptions.printerName;
-      
-      // If no printer specified or it's empty, try to find the default
-      if (!effectivePrinterName || effectivePrinterName.trim() === '') {
-        const defaultPrinter = availablePrinters.find(p => p.isDefault);
-        if (defaultPrinter) {
-          console.log('Usando impresora predeterminada:', defaultPrinter.name);
-          effectivePrinterName = defaultPrinter.name;
-        }
-      }
-      
-      // Final print with effective printer and enhanced options
-      const printOptions: PrintInvoiceOptions = {
-        html: htmlContent,
-        printerName: effectivePrinterName || undefined,
-        silent: options?.silent ?? this.defaultPrintOptions.silent,
-        copies: options?.copies || 1,
-        options: {
-          // Enhanced thermal printer options
-          paperWidth: '80mm',
-          printSpeed: '200mm',
-          fontSize: '12pt',
-          scaleFactor: 100,
-          printBackground: true,
-          margins: { 
-            marginType: 'custom',
-            top: 0,
-            bottom: 0,
-            left: 0,
-            right: 0
-          },
-          mediaSize: {
-            name: 'CUSTOM',
-            width_microns: 80000, // 80mm in microns
-            height_microns: 200000,
-            custom_display_name: 'Ticket 80mm'
-          },
-          // Add any custom options passed by the caller
-          ...options?.printOptions
-        }
-      };
-
-      console.log('Print options:', {
-        printerName: printOptions.printerName,
-        silent: printOptions.silent,
-        copies: printOptions.copies
-      });
-      
-      const result = await window.api.printInvoice(printOptions);
-      return result && result.success === true;
+      // Usar ThermalPrintService para imprimir
+      const result = await this.thermalPrintService.printReceipt(sale);
+      return result.success;
     } catch (error) {
       console.error('Error al imprimir:', error);
       return false;
     }
   }
   
-  // Guardar factura como PDF con mejor manejo de errores
+  /**
+   * Guardar factura como PDF
+   * @param sale Datos de la venta
+   * @param htmlContent Contenido HTML
+   * @param options Opciones para guardar
+   * @returns Ruta del archivo PDF o null si falla
+   */
   public async saveAsPdf(
     sale: PreviewSale,
     htmlContent: string,
     options?: Partial<SavePdfOptions>
   ): Promise<string | null> {
     try {
-      const saveOptions = { ...this.defaultSaveOptions, ...options };
-      
-      if (!window.api?.savePdf) {
+      // Verificar si la API está disponible
+      if (!window.api?.savePdf && !window.printerApi?.savePdf) {
         console.warn('API para guardar PDF no disponible');
         return null;
       }
       
+      // Cargar configuración si es necesario
+      let saveDirectory = options?.directory || '';
+      if (!saveDirectory && window.api?.getSettings) {
+        const settings = await window.api.getSettings();
+        saveDirectory = settings?.ruta_pdf || '';
+        
+        if (!saveDirectory && window.api.getAppPaths) {
+          const paths = await window.api.getAppPaths();
+          saveDirectory = `${paths.documents}/WilPOS/Facturas`;
+        }
+      }
+      
       // Generar nombre de archivo si no se proporciona
-      if (!saveOptions.filename) {
-        const date = new Date().toISOString().split('T')[0];
-        saveOptions.filename = `factura-${sale.id || 'temp'}-${date}.pdf`;
+      const filename = options?.filename || 
+        `factura-${sale.id || 'temp'}-${new Date().toISOString().split('T')[0]}.pdf`;
+      
+      // Ruta completa
+      const filePath = `${saveDirectory}/${filename}`;
+      
+      // Guardar PDF
+      let result;
+      if (window.printerApi?.savePdf) {
+        result = await window.printerApi.savePdf({
+          html: htmlContent,
+          path: filePath,
+          options: { printBackground: true }
+        });
+      } else if (window.api?.savePdf) {
+        result = await window.api.savePdf({
+          html: htmlContent,
+          path: filePath,
+          options: { printBackground: true }
+        });
       }
       
-      // Crear directorio si no existe
-      try {
-        // En un contexto Electron, podemos usar la API para asegurar que existe el directorio
-        const targetDir = saveOptions.directory;
-        if (window.api.getAppPaths) {
-          await window.api.getAppPaths(); // Verificar que la API está disponible
-          console.log('Guardando PDF en:', targetDir);
-          // La creación del directorio se maneja en el proceso principal
-        }
-      } catch (dirError) {
-        console.warn('Error al verificar directorio:', dirError);
-        // Continuar de todas formas - el proceso principal manejará la creación del directorio
+      if (!result?.success) {
+        throw new Error(result?.error || 'Error al guardar PDF');
       }
       
-      // Verificar que el contenido HTML no esté vacío
-      if (!htmlContent || htmlContent.trim() === '') {
-        console.error('Contenido HTML vacío para PDF');
-        return null;
-      }
-
-      // Full path will be constructed in main process
-      const filePath = `${saveOptions.directory}/${saveOptions.filename}`;
-      
-      // Save PDF
-      const result = await window.api.savePdf({
-        html: htmlContent,
-        path: filePath,
-        options: {
-          printBackground: true,
-          margins: { top: 5, right: 5, bottom: 5, left: 5 },
-          pageSize: 'A4'
-        }
-      }) as SavePdfResult;
-      
-      if (result.success) {
-        try {
-          // Intentar abrir la carpeta si está configurado para hacerlo
-          if (window.api.openFolder && saveOptions.directory) {
-            window.api.openFolder(saveOptions.directory)
-              .catch(err => console.warn('No se pudo abrir carpeta:', err));
-          }
-        } catch (openError) {
-          console.warn('Error al intentar abrir carpeta:', openError);
-        }
-      }
-      
-      return result.success ? (result.path || filePath) : null;
+      return result.path || filePath;
     } catch (error) {
-      console.error('Error al guardar factura como PDF:', error);
+      console.error('Error al guardar como PDF:', error);
       return null;
     }
   }
   
-  // Método mejorado para generar HTML optimizado para impresora térmica
+  /**
+   * Generar HTML para impresora térmica
+   * @param sale Datos de la venta
+   * @returns HTML formateado
+   */
   public generateThermalPrintHTML(sale: PreviewSale): string {
     try {
-      // Ensure sale has all required properties
-      if (!sale || !sale.detalles || !Array.isArray(sale.detalles)) {
-        console.error('Invalid sale object for thermal print HTML generation', sale);
-        throw new Error('Datos de venta inválidos para impresión');
-      }
-  
-      // Create a valid HTML document structure for thermal printers
+      // Esta función genera un HTML básico para facturas térmicas
+      // Si estás usando FacturaViewer para el HTML, deberías modificar esto
       return `
         <!DOCTYPE html>
         <html>
@@ -368,7 +229,7 @@ export class InvoiceManager {
             <div>Fecha: ${new Date(sale.fecha_venta).toLocaleString()}</div>
             <div>Cliente: ${sale.cliente || 'Cliente General'}</div>
           </div>
-  
+
           <!-- Items Section -->
           <div class="section">DETALLE DE VENTA</div>
           <table>
@@ -387,30 +248,33 @@ export class InvoiceManager {
               </tr>
             `).join('')}
           </table>
-  
-          <!-- Totals Section -->
+
+          <!-- Totals -->
           <div>
             <div class="total-row">
               <span>Subtotal:</span>
               <span>${this.formatCurrency(sale.total - sale.impuestos)}</span>
             </div>
+            
             ${sale.impuestos > 0 ? `
               <div class="total-row">
                 <span>Impuestos:</span>
                 <span>${this.formatCurrency(sale.impuestos)}</span>
               </div>
             ` : ''}
+            
             ${sale.descuento > 0 ? `
               <div class="total-row">
                 <span>Descuento:</span>
                 <span>-${this.formatCurrency(sale.descuento)}</span>
               </div>
             ` : ''}
+            
             <div class="grand-total">
               <span>TOTAL:</span>
               <span>${this.formatCurrency(sale.total)}</span>
             </div>
-  
+
             <!-- Payment Information -->
             ${sale.metodo_pago === 'Efectivo' ? `
               <div class="total-row">
@@ -428,7 +292,7 @@ export class InvoiceManager {
               </div>
             `}
           </div>
-  
+
           <!-- Footer Section -->
           <div class="footer">
             <p>Gracias por su compra</p>
@@ -440,7 +304,6 @@ export class InvoiceManager {
       `;
     } catch (error) {
       console.error('Error generating thermal print HTML:', error);
-      // Return a simplified fallback template
       return `
         <!DOCTYPE html>
         <html>
@@ -462,16 +325,14 @@ export class InvoiceManager {
       `;
     }
   }
-  
 
   /**
-   * Generate HTML content optimized for printing
-   * @param sale The sale data to use for the invoice
-   * @returns HTML string for printing
+   * Genera contenido HTML para impresión estándar
+   * @param sale Datos de la venta
+   * @returns HTML formateado
    */
   public generatePrintHTML(sale: PreviewSale): string {
     try {
-      // Build a complete HTML document for printing
       return `
         <!DOCTYPE html>
         <html>
@@ -616,7 +477,6 @@ export class InvoiceManager {
       `;
     } catch (error) {
       console.error('Error generating print HTML:', error);
-      // Return a simplified fallback template
       return `
         <!DOCTYPE html>
         <html>
@@ -638,27 +498,24 @@ export class InvoiceManager {
     }
   }
 
-  // Método mejorado para formatear moneda
+  /**
+   * Formatea valores monetarios
+   * @param amount Cantidad a formatear
+   * @returns Cadena formateada
+   */
   private formatCurrency(amount: number): string {
     try {
+      // Formatear usando Intl.NumberFormat
       return new Intl.NumberFormat('es-DO', { 
         style: 'currency', 
         currency: 'DOP',
         minimumFractionDigits: 2
       }).format(amount);
     } catch (error) {
-      return `RD$ ${amount.toFixed(2)}`; // Formato alternativo
+      // Formato alternativo en caso de error
+      return `RD$ ${amount.toFixed(2)}`;
     }
   }
-
-  // Calcular subtotal (total - impuestos)
-  private calculateSubtotal(sale: PreviewSale): number {
-    try {
-      return sale.total - (sale.impuestos || 0);
-    } catch (error) {
-      return sale.total;
-    }
-  }
- }
+}
 
 export default InvoiceManager;

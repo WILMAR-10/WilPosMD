@@ -1,48 +1,37 @@
-// src/services/ThermalPrintService.ts - Fixed version
+// src/services/ThermalPrintService.ts - Versión simplificada
 import { PreviewSale } from '../types/sales';
-import { PrintInvoiceOptions } from '../types/printer';
 
-// Define types for thermal printer paper size
+// Tipos de papel térmico soportados
 export enum ThermalPaperSize {
   PAPER_80MM = '80mm',
   PAPER_58MM = '58mm'
 }
 
-// Improved printer connection interface
-export interface ThermalPrinterOptions {
-  printerName?: string;
-  paperSize?: ThermalPaperSize;
-  timeout?: number;
+// Resultado de la impresión
+export interface PrintResult {
+  success: boolean;
+  message?: string;
 }
 
-// Character set fallbacks
-const CHARACTER_SETS = {
-  PC437_USA: 'pc437_usa',
-  PC850_MULTILINGUAL: 'pc850_multilingual',
-  PC858_EURO: 'pc858_euro',
-  PC860_PORTUGUESE: 'pc860_portuguese',
-  PC863_CANADIAN_FRENCH: 'pc863_canadian_french',
-  PC865_NORDIC: 'pc865_nordic',
-  PC866_CYRILLIC: 'pc866_cyrillic',
-  KATAKANA: 'katakana'
-};
-
 /**
- * Service for handling thermal printer operations
- * with improved error handling and fallbacks
+ * Servicio simplificado para manejo de impresoras térmicas
+ * Sigue el patrón Singleton para tener una única instancia global
  */
 export class ThermalPrintService {
   private static instance: ThermalPrintService;
   private printerName: string | undefined = undefined;
   private paperSize: ThermalPaperSize = ThermalPaperSize.PAPER_80MM;
   
-  // Private constructor for singleton pattern
+  /**
+   * Constructor privado para el patrón singleton
+   */
   private constructor() {
-    // Load settings when instantiated
     this.loadSettings();
   }
   
-  // Get singleton instance
+  /**
+   * Obtener la instancia única del servicio
+   */
   public static getInstance(): ThermalPrintService {
     if (!ThermalPrintService.instance) {
       ThermalPrintService.instance = new ThermalPrintService();
@@ -51,7 +40,7 @@ export class ThermalPrintService {
   }
   
   /**
-   * Load printer settings from application configuration
+   * Cargar configuración de la aplicación
    */
   private async loadSettings(): Promise<void> {
     try {
@@ -59,20 +48,14 @@ export class ThermalPrintService {
         const settings = await window.api.getSettings();
         
         if (settings) {
-          // Changed from null to undefined for TypeScript compatibility
           this.printerName = settings.impresora_termica || undefined;
           
-          // Set paper size based on configuration
+          // Configurar tamaño de papel basado en configuración
           if (settings.tipo_impresora === 'termica58') {
             this.paperSize = ThermalPaperSize.PAPER_58MM;
           } else {
             this.paperSize = ThermalPaperSize.PAPER_80MM;
           }
-          
-          console.log("Thermal printer settings loaded:", {
-            printerName: this.printerName,
-            paperSize: this.paperSize
-          });
         }
       }
     } catch (error) {
@@ -81,134 +64,113 @@ export class ThermalPrintService {
   }
   
   /**
-   * Check if thermal printer is available
-   * @returns Object with status and printer name
+   * Verificar si hay una impresora térmica disponible
    */
   public async checkPrinterStatus(): Promise<{ available: boolean; printerName?: string; message?: string }> {
     try {
-      // Try to get available printers
-      let printers: any[] = [];
+      // Obtener todas las impresoras disponibles
+      const printers = await this.getAllPrinters();
       
-      // First try with electronPrinting if available
-      if (window.electronPrinting?.getPrinters) {
-        try {
-          printers = await window.electronPrinting.getPrinters();
-        } catch (error) {
-          console.warn('Error getting printers with electronPrinting:', error);
-        }
-      }
-      
-      // If no printers found yet, try with window.api
-      if (printers.length === 0 && window.api?.getPrinters) {
-        try {
-          printers = await window.api.getPrinters();
-        } catch (error) {
-          console.warn('Error getting printers with window.api:', error);
-        }
-      }
-      
-      // Check if we have a configured printer
+      // Si tenemos una impresora configurada, verificar si está disponible
       if (this.printerName) {
-        const configuredPrinter = printers.find(p => p.name === this.printerName);
+        const configuredPrinter = printers.printers.find(p => p.name === this.printerName);
         
         if (configuredPrinter) {
           return { 
             available: true, 
             printerName: this.printerName,
-            message: `Configured printer "${this.printerName}" is available`
-          };
-        }
-        
-        // If configured printer is not available, suggest alternatives
-        const thermalPrinters = printers.filter(p => {
-          const name = p.name.toLowerCase();
-          return name.includes('thermal') || 
-                 name.includes('receipt') || 
-                 name.includes('pos') || 
-                 name.includes('80mm') || 
-                 name.includes('58mm');
-        });
-        
-        if (thermalPrinters.length > 0) {
-          return {
-            available: false,
-            message: `Configured printer "${this.printerName}" not found. Available thermal printers: ${thermalPrinters.map(p => p.name).join(', ')}`
+            message: `Impresora configurada "${this.printerName}" disponible`
           };
         }
         
         return {
           available: false,
-          message: `No se encontró impresora térmica. Usando impresora "${this.printerName}" como alternativa.`
+          message: `Impresora configurada "${this.printerName}" no disponible`
         };
       }
       
-      // If no printer configured, try to find a thermal printer
-      const thermalPrinters = printers.filter(p => {
-        const name = p.name.toLowerCase();
-        return name.includes('thermal') || 
-               name.includes('receipt') || 
-               name.includes('pos') || 
-               name.includes('80mm') || 
-               name.includes('58mm');
-      });
-      
-      if (thermalPrinters.length > 0) {
-        // Use the first thermal printer found
-        const printer = thermalPrinters[0];
-        this.printerName = printer.name;
+      // Si no hay impresora configurada, buscar impresoras térmicas
+      const thermalPrinter = printers.printers.find(p => this.isThermalPrinter(p.name));
+      if (thermalPrinter) {
+        // Guardar la impresora detectada para usos futuros
+        this.printerName = thermalPrinter.name;
         
         return { 
           available: true, 
-          printerName: printer.name,
-          message: `Se detectó automáticamente la impresora térmica: "${this.printerName}"`
+          printerName: thermalPrinter.name,
+          message: `Impresora térmica detectada: "${thermalPrinter.name}"`
         };
       }
       
-      // If no thermal printers found, check if there's any printer
-      if (printers.length > 0) {
+      // Si no hay impresoras térmicas, usar la impresora predeterminada
+      const defaultPrinter = printers.printers.find(p => p.isDefault);
+      if (defaultPrinter) {
         return {
-          available: false,
-          message: `No thermal printers detected. Available printers: ${printers.map(p => p.name).join(', ')}`
+          available: true,
+          printerName: defaultPrinter.name,
+          message: `No se detectaron impresoras térmicas. Usando impresora predeterminada "${defaultPrinter.name}"`
         };
       }
       
       return {
         available: false,
-        message: 'No printers detected'
+        message: 'No se detectaron impresoras'
       };
     } catch (error) {
       console.error('Error checking printer status:', error);
       return {
         available: false,
-        message: `Error checking printer status: ${error instanceof Error ? error.message : 'Unknown error'}`
+        message: `Error al verificar impresora: ${error instanceof Error ? error.message : 'Error desconocido'}`
       };
     }
   }
   
   /**
-   * Get all available printers via the unified preload API
+   * Obtener todas las impresoras disponibles
    */
-  public async getAllPrinters(): Promise<{ printers: PrinterInfo[] }> {
+  public async getAllPrinters(): Promise<{ printers: any[] }> {
     try {
-      const res = await window.printerApi.getPrinters();
-      if (!res.success) throw new Error(res.error);
-      return { printers: res.printers };
+      // Intentar usar printerApi
+      if (window.printerApi?.getPrinters) {
+        const res = await window.printerApi.getPrinters();
+        if (res.success) {
+          return { printers: res.printers };
+        }
+      }
+      
+      // Intentar con window.api como fallback
+      if (window.api?.getPrinters) {
+        const printers = await window.api.getPrinters();
+        return { printers };
+      }
+      
+      return { printers: [] };
     } catch (error) {
-      console.warn('Error getting printers via printerApi:', error);
+      console.warn('Error getting printers:', error);
       return { printers: [] };
     }
   }
   
   /**
-   * Format a sale object for thermal printer
-   * @param sale The sale to print
-   * @returns HTML content optimized for thermal printing
+   * Detectar si una impresora es térmica basado en su nombre
+   */
+  private isThermalPrinter(name: string): boolean {
+    const lowerName = name.toLowerCase();
+    return lowerName.includes('thermal') ||
+           lowerName.includes('receipt') ||
+           lowerName.includes('pos') ||
+           lowerName.includes('80mm') ||
+           lowerName.includes('58mm');
+  }
+  
+  /**
+   * Genera HTML optimizado para impresora térmica
    */
   private generateThermalReceiptHTML(sale: PreviewSale): string {
+    // Ajustar ancho según el tamaño de papel
+    const contentWidth = this.paperSize === ThermalPaperSize.PAPER_58MM ? '48mm' : '72mm';
+    
     try {
-      // Width settings based on paper size
-      const contentWidth = this.paperSize === ThermalPaperSize.PAPER_58MM ? '48mm' : '72mm';
-      
       return `
         <!DOCTYPE html>
         <html>
@@ -301,7 +263,7 @@ export class ThermalPrintService {
               <tr>
                 <td>${item.quantity}</td>
                 <td>${item.name.substring(0, 15)}${item.name.length > 15 ? '...' : ''}</td>
-                <td class="right">RD${item.price.toFixed(2)}</td>
+                <td class="right">RD$${item.price.toFixed(2)}</td>
                 <td class="right">RD$${item.subtotal.toFixed(2)}</td>
               </tr>
             `).join('')}
@@ -371,14 +333,15 @@ export class ThermalPrintService {
   }
   
   /**
-   * Print a receipt directly to the thermal printer
+   * Imprimir un recibo directamente en la impresora térmica
    */
-  public async printReceipt(
-    sale: PreviewSale
-  ): Promise<{ success: boolean; message?: string }> {
+  public async printReceipt(sale: PreviewSale): Promise<PrintResult> {
     try {
+      // Generar HTML específico para impresora térmica
       const html = this.generateThermalReceiptHTML(sale);
-      const opts = {
+      
+      // Preparar opciones de impresión
+      const printOptions = {
         html,
         printerName: this.printerName,
         silent: true,
@@ -387,28 +350,127 @@ export class ThermalPrintService {
           pageSize: this.paperSize
         }
       };
-      const result = await window.printerApi.print(opts);
-      if (!result.success) throw new Error(result.error);
-      return { success: true };
-    } catch (error: any) {
+      
+      // Usar API de impresión disponible
+      if (window.printerApi?.print) {
+        const result = await window.printerApi.print(printOptions);
+        
+        if (!result.success) {
+          throw new Error(result.error || 'Error al imprimir');
+        }
+        
+        return { success: true, message: 'Impresión enviada a la impresora térmica' };
+      } else if (window.api?.printInvoice) {
+        const result = await window.api.printInvoice(printOptions);
+        
+        if (!result.success) {
+          throw new Error(result.error || 'Error al imprimir');
+        }
+        
+        return { success: true, message: 'Impresión enviada a la impresora térmica' };
+      } else {
+        throw new Error('API de impresión no disponible');
+      }
+    } catch (error) {
       console.error('Error printing receipt:', error);
-      return { success: false, message: error.message };
+      return { 
+        success: false, 
+        message: `Error al imprimir: ${error instanceof Error ? error.message : 'Error desconocido'}`
+      };
     }
   }
   
   /**
-   * Test the thermal printer with a simplified test page
+   * Imprimir una página de prueba para verificar la impresora
    */
-  public async testPrinter(): Promise<{ success: boolean; message: string }> {
+  public async testPrinter(): Promise<PrintResult> {
     try {
-      const html = `<html><body><h1>Test</h1></body></html>`;
-      const opts = { html, printerName: this.printerName, silent: true, options: { thermalPrinter: true, pageSize: this.paperSize } };
-      const res = await window.printerApi.print(opts);
-      if (!res.success) throw new Error(res.error);
-      return { success: true, message: 'Test print sent successfully' };
-    } catch (error: any) {
-      console.error('Error sending test print:', error);
-      return { success: false, message: error.message };
+      // HTML de prueba simple
+      const html = `
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <meta charset="UTF-8">
+          <title>Prueba de Impresora</title>
+          <style>
+            @page { 
+              margin: 0mm; 
+              size: ${this.paperSize};
+            }
+            body {
+              font-family: 'Arial', sans-serif;
+              text-align: center;
+              padding: 5mm;
+            }
+            .title {
+              font-size: 12pt;
+              font-weight: bold;
+              margin-bottom: 5mm;
+            }
+            .section {
+              margin: 5mm 0;
+              text-align: left;
+            }
+          </style>
+        </head>
+        <body>
+          <div class="title">PRUEBA DE IMPRESORA TÉRMICA</div>
+          
+          <div class="section">
+            Impresora: ${this.printerName || 'Predeterminada'}
+            Tamaño: ${this.paperSize}
+            Fecha: ${new Date().toLocaleString()}
+          </div>
+          
+          <div class="section">
+            ABCDEFGHIJKLMNÑOPQRSTUVWXYZ
+            1234567890
+          </div>
+          
+          <div style="border-top: 1px dashed #000; margin-top: 5mm; padding-top: 5mm;">
+            Si puede leer este texto, la impresora funciona correctamente.
+          </div>
+        </body>
+        </html>
+      `;
+      
+      // Opciones de impresión
+      const printOptions = {
+        html,
+        printerName: this.printerName,
+        silent: true,
+        options: {
+          thermalPrinter: true,
+          pageSize: this.paperSize
+        }
+      };
+      
+      // Usar API de impresión disponible
+      if (window.printerApi?.print) {
+        const result = await window.printerApi.print(printOptions);
+        
+        if (!result.success) {
+          throw new Error(result.error || 'Error al imprimir página de prueba');
+        }
+        
+        return { success: true, message: 'Página de prueba enviada a la impresora' };
+      } else if (window.api?.printInvoice) {
+        const result = await window.api.printInvoice(printOptions);
+        
+        if (!result.success) {
+          throw new Error(result.error || 'Error al imprimir página de prueba');
+        }
+        
+        return { success: true, message: 'Página de prueba enviada a la impresora' };
+      } else {
+        throw new Error('API de impresión no disponible');
+      }
+    } catch (error) {
+      console.error('Error printing test page:', error);
+      return { 
+        success: false, 
+        message: `Error al imprimir página de prueba: ${error instanceof Error ? error.message : 'Error desconocido'}`
+      };
     }
   }
 }

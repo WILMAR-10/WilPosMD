@@ -89,6 +89,9 @@ const Factura: React.FC = () => {
     type: 'warning' as 'warning' | 'danger' | 'info'
   });
 
+  // Estado para manejo de envío
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
   // Cargar configuración cuando inicia el componente
   useEffect(() => {
     const loadSettings = async () => {
@@ -296,8 +299,8 @@ const Factura: React.FC = () => {
     }
   };
 
-  // Imprimir factura
-  const handlePrint = async () => {
+  // Manejo de impresión manual simplificado
+  async function handlePrint() {
     if (!state.selectedInvoice) {
       showAlert('warning', 'No hay factura seleccionada para imprimir');
       return;
@@ -308,36 +311,27 @@ const Factura: React.FC = () => {
         throw new Error('Referencia de factura no disponible');
       }
 
-      // Use our ThermalPrintService
       const thermalService = ThermalPrintService.getInstance();
-
-      // Check printer status first
       const printerStatus = await thermalService.checkPrinterStatus();
+      setIsSubmitting(true);
 
       if (printerStatus.available) {
-        // Print using thermal printer
         const result = await thermalService.printReceipt(state.selectedInvoice);
-
         if (result.success) {
           showAlert('success', 'Factura enviada a impresora térmica');
         } else {
           throw new Error(result.message || 'Error al imprimir');
         }
       } else {
-        // Fallback to normal printer
-        const printContent = invoiceManager.generatePrintHTML(state.selectedInvoice);
-
-        const success = await invoiceManager.printInvoice(
+        const mgr = InvoiceManager.getInstance();
+        const html = mgr.generatePrintHTML(state.selectedInvoice);
+        const success = await mgr.printInvoice(
           state.selectedInvoice,
-          printContent,
-          {
-            silent: true,
-            printerName: settings?.impresora_termica
-          }
+          html,
+          { silent: true, printerName: settings?.impresora_termica }
         );
-
         if (success) {
-          showAlert('success', 'Factura enviada a impresión normal');
+          showAlert('success', 'Factura enviada a impresora estándar');
         } else {
           throw new Error('Error al imprimir');
         }
@@ -349,26 +343,26 @@ const Factura: React.FC = () => {
         'Error al imprimir la factura: ' +
           (error instanceof Error ? error.message : 'Error desconocido')
       );
+    } finally {
+      setIsSubmitting(false);
     }
-  };
+  }
 
-  // Exportar factura como PDF
+  // Exportar factura como PDF simplificado
   const handleExportPDF = async () => {
     if (!state.selectedInvoice) {
       showAlert('warning', 'No hay factura seleccionada para exportar');
       return;
     }
-    
+
     try {
       if (!facturaRef.current) {
         throw new Error('Referencia de factura no disponible');
       }
-      
-      // Obtener contenido HTML para PDF de buena calidad
+
       const htmlContent = facturaRef.current.outerHTML;
-      
-      // Guardar PDF
-      const pdfPath = await invoiceManager.saveAsPdf(
+      const mgr = InvoiceManager.getInstance();
+      const pdfPath = await mgr.saveAsPdf(
         state.selectedInvoice,
         htmlContent,
         {
@@ -376,7 +370,7 @@ const Factura: React.FC = () => {
           filename: `factura-${state.selectedInvoice.id}-${new Date().toISOString().split('T')[0]}.pdf`
         }
       );
-      
+
       if (pdfPath) {
         showAlert('success', `Factura guardada como PDF: ${pdfPath}`);
       } else {
