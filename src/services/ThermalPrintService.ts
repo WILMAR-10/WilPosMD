@@ -1,36 +1,43 @@
-// src/services/ThermalPrintService.ts - Versión simplificada
+// src/services/ThermalPrintService.ts
 import { PreviewSale } from '../types/sales';
 
-// Tipos de papel térmico soportados
+// Enum for paper sizes following SOLID principles
 export enum ThermalPaperSize {
   PAPER_80MM = '80mm',
   PAPER_58MM = '58mm'
 }
 
-// Resultado de la impresión
+// Interface for printer-related responses (Interface Segregation)
 export interface PrintResult {
   success: boolean;
   message?: string;
+  error?: string;
+}
+
+// Interface for printer information
+export interface PrinterInfo {
+  name: string;
+  description?: string;
+  isDefault?: boolean;
+  isThermal?: boolean;
 }
 
 /**
- * Servicio simplificado para manejo de impresoras térmicas
- * Sigue el patrón Singleton para tener una única instancia global
+ * Service for thermal printer operations following Singleton pattern
+ * and Single Responsibility Principle
  */
 export class ThermalPrintService {
   private static instance: ThermalPrintService;
   private printerName: string | undefined = undefined;
   private paperSize: ThermalPaperSize = ThermalPaperSize.PAPER_80MM;
   
-  /**
-   * Constructor privado para el patrón singleton
-   */
+  // Private constructor for singleton pattern
   private constructor() {
     this.loadSettings();
   }
   
   /**
-   * Obtener la instancia única del servicio
+   * Get the singleton instance
    */
   public static getInstance(): ThermalPrintService {
     if (!ThermalPrintService.instance) {
@@ -40,7 +47,7 @@ export class ThermalPrintService {
   }
   
   /**
-   * Cargar configuración de la aplicación
+   * Load settings from app configuration
    */
   private async loadSettings(): Promise<void> {
     try {
@@ -50,7 +57,7 @@ export class ThermalPrintService {
         if (settings) {
           this.printerName = settings.impresora_termica || undefined;
           
-          // Configurar tamaño de papel basado en configuración
+          // Set paper size based on configuration
           if (settings.tipo_impresora === 'termica58') {
             this.paperSize = ThermalPaperSize.PAPER_58MM;
           } else {
@@ -64,14 +71,21 @@ export class ThermalPrintService {
   }
   
   /**
-   * Verificar si hay una impresora térmica disponible
+   * Force reload of settings
+   */
+  public async reloadSettings(): Promise<void> {
+    await this.loadSettings();
+  }
+  
+  /**
+   * Check if a thermal printer is available
    */
   public async checkPrinterStatus(): Promise<{ available: boolean; printerName?: string; message?: string }> {
     try {
-      // Obtener todas las impresoras disponibles
+      // Get all available printers
       const printers = await this.getAllPrinters();
       
-      // Si tenemos una impresora configurada, verificar si está disponible
+      // If we have a configured printer, check if it's available
       if (this.printerName) {
         const configuredPrinter = printers.printers.find(p => p.name === this.printerName);
         
@@ -89,10 +103,10 @@ export class ThermalPrintService {
         };
       }
       
-      // Si no hay impresora configurada, buscar impresoras térmicas
+      // If no printer is configured, look for thermal printers
       const thermalPrinter = printers.printers.find(p => this.isThermalPrinter(p.name));
       if (thermalPrinter) {
-        // Guardar la impresora detectada para usos futuros
+        // Save the detected printer for future use
         this.printerName = thermalPrinter.name;
         
         return { 
@@ -102,7 +116,7 @@ export class ThermalPrintService {
         };
       }
       
-      // Si no hay impresoras térmicas, usar la impresora predeterminada
+      // If no thermal printers, use the default printer
       const defaultPrinter = printers.printers.find(p => p.isDefault);
       if (defaultPrinter) {
         return {
@@ -126,11 +140,11 @@ export class ThermalPrintService {
   }
   
   /**
-   * Obtener todas las impresoras disponibles
+   * Get all available printers
    */
-  public async getAllPrinters(): Promise<{ printers: any[] }> {
+  public async getAllPrinters(): Promise<{ printers: PrinterInfo[] }> {
     try {
-      // Intentar usar printerApi
+      // Try using printerApi first (preferred)
       if (window.printerApi?.getPrinters) {
         const res = await window.printerApi.getPrinters();
         if (res.success) {
@@ -138,12 +152,14 @@ export class ThermalPrintService {
         }
       }
       
-      // Intentar con window.api como fallback
+      // Fallback to window.api
       if (window.api?.getPrinters) {
         const printers = await window.api.getPrinters();
         return { printers };
       }
       
+      // Last resort - empty list
+      console.warn('No printer API available');
       return { printers: [] };
     } catch (error) {
       console.warn('Error getting printers:', error);
@@ -152,7 +168,7 @@ export class ThermalPrintService {
   }
   
   /**
-   * Detectar si una impresora es térmica basado en su nombre
+   * Detect if a printer is a thermal printer based on its name
    */
   private isThermalPrinter(name: string): boolean {
     const lowerName = name.toLowerCase();
@@ -160,14 +176,30 @@ export class ThermalPrintService {
            lowerName.includes('receipt') ||
            lowerName.includes('pos') ||
            lowerName.includes('80mm') ||
-           lowerName.includes('58mm');
+           lowerName.includes('58mm') ||
+           lowerName.includes('ticket');
   }
   
   /**
-   * Genera HTML optimizado para impresora térmica
+   * Format number as currency
+   */
+  private formatCurrency(amount: number): string {
+    try {
+      return new Intl.NumberFormat('es-DO', { 
+        style: 'currency', 
+        currency: 'DOP',
+        minimumFractionDigits: 2
+      }).format(amount);
+    } catch (error) {
+      return `RD$ ${amount.toFixed(2)}`;
+    }
+  }
+  
+  /**
+   * Generate HTML optimized for thermal printers
    */
   private generateThermalReceiptHTML(sale: PreviewSale): string {
-    // Ajustar ancho según el tamaño de papel
+    // Adjust width based on paper size
     const contentWidth = this.paperSize === ThermalPaperSize.PAPER_58MM ? '48mm' : '72mm';
     
     try {
@@ -316,6 +348,7 @@ export class ThermalPrintService {
       `;
     } catch (error) {
       console.error('Error generating thermal receipt HTML:', error);
+      // Simple fallback (KISS principle)
       return `
         <!DOCTYPE html>
         <html>
@@ -333,14 +366,14 @@ export class ThermalPrintService {
   }
   
   /**
-   * Imprimir un recibo directamente en la impresora térmica
+   * Print a receipt using thermal printer
    */
   public async printReceipt(sale: PreviewSale): Promise<PrintResult> {
     try {
-      // Generar HTML específico para impresora térmica
+      // Generate thermal-specific HTML
       const html = this.generateThermalReceiptHTML(sale);
       
-      // Preparar opciones de impresión
+      // Prepare print options
       const printOptions = {
         html,
         printerName: this.printerName,
@@ -351,7 +384,7 @@ export class ThermalPrintService {
         }
       };
       
-      // Usar API de impresión disponible
+      // Use available API
       if (window.printerApi?.print) {
         const result = await window.printerApi.print(printOptions);
         
@@ -381,11 +414,11 @@ export class ThermalPrintService {
   }
   
   /**
-   * Imprimir una página de prueba para verificar la impresora
+   * Print a test page
    */
   public async testPrinter(): Promise<PrintResult> {
     try {
-      // HTML de prueba simple
+      // HTML for test page
       const html = `
         <!DOCTYPE html>
         <html>
@@ -434,7 +467,7 @@ export class ThermalPrintService {
         </html>
       `;
       
-      // Opciones de impresión
+      // Print options
       const printOptions = {
         html,
         printerName: this.printerName,
@@ -445,7 +478,7 @@ export class ThermalPrintService {
         }
       };
       
-      // Usar API de impresión disponible
+      // Use available API
       if (window.printerApi?.print) {
         const result = await window.printerApi.print(printOptions);
         
@@ -471,6 +504,138 @@ export class ThermalPrintService {
         success: false, 
         message: `Error al imprimir página de prueba: ${error instanceof Error ? error.message : 'Error desconocido'}`
       };
+    }
+  }
+  
+  /**
+   * Print using the electron-pos-printer library (extends functionality)
+   * This is a more advanced printing method that can be used for specific thermal printer features
+   */
+  public async printWithPosPrinter(sale: PreviewSale): Promise<PrintResult> {
+    try {
+      // Check if we have the specialized API
+      if (!window.api?.printWithPosPrinter) {
+        // Fallback to standard printing if specialized API is not available
+        return this.printReceipt(sale);
+      }
+      
+      // Create data for electron-pos-printer
+      const printData = [
+        {
+          type: 'text',
+          value: 'WILPOS',
+          style: { fontWeight: "700", textAlign: 'center', fontSize: "14px" }
+        },
+        {
+          type: 'text',
+          value: `Factura #${sale.id || 'N/A'}`,
+          style: { textAlign: 'center', fontSize: "12px" }
+        },
+        {
+          type: 'text',
+          value: `Fecha: ${new Date(sale.fecha_venta).toLocaleDateString()}`,
+          style: { textAlign: 'center', fontSize: "10px" }
+        },
+        {
+          type: 'text',
+          value: `Cliente: ${sale.cliente || 'Cliente General'}`,
+          style: { textAlign: 'center', fontSize: "10px", marginBottom: '10px' }
+        },
+        {
+          type: 'text',
+          value: 'DETALLE DE VENTA',
+          style: { fontWeight: "700", textAlign: 'center', fontSize: "12px", borderTop: '1px dashed black', borderBottom: '1px dashed black', paddingTop: '5px', paddingBottom: '5px', marginTop: '5px', marginBottom: '5px' }
+        },
+        // Add each product
+        ...sale.detalles.map(item => ({
+          type: 'text',
+          value: `${item.quantity}x ${item.name.substring(0, 20)}${item.name.length > 20 ? '...' : ''}\n   ${this.formatCurrency(item.price)} c/u - ${this.formatCurrency(item.subtotal)}`,
+          style: { fontSize: "10px", marginBottom: '5px' }
+        })),
+        // Totals section
+        {
+          type: 'text',
+          value: '--------------------------------',
+          style: { textAlign: 'center' }
+        },
+        {
+          type: 'text',
+          value: `Subtotal: ${this.formatCurrency(sale.total - sale.impuestos)}`,
+          style: { textAlign: 'right', fontSize: "10px" }
+        },
+        {
+          type: 'text',
+          value: `Impuestos: ${this.formatCurrency(sale.impuestos)}`,
+          style: { textAlign: 'right', fontSize: "10px" }
+        },
+        ...(sale.descuento > 0 ? [{
+          type: 'text',
+          value: `Descuento: -${this.formatCurrency(sale.descuento)}`,
+          style: { textAlign: 'right', fontSize: "10px" }
+        }] : []),
+        {
+          type: 'text',
+          value: `TOTAL: ${this.formatCurrency(sale.total)}`,
+          style: { textAlign: 'right', fontWeight: "700", fontSize: "12px", borderTop: '1px solid black', paddingTop: '5px', marginTop: '5px' }
+        },
+        ...(sale.metodo_pago === 'Efectivo' ? [
+          {
+            type: 'text',
+            value: `Recibido: ${this.formatCurrency(sale.monto_recibido)}`,
+            style: { textAlign: 'right', fontSize: "10px" }
+          },
+          {
+            type: 'text',
+            value: `Cambio: ${this.formatCurrency(sale.cambio)}`,
+            style: { textAlign: 'right', fontSize: "10px" }
+          }
+        ] : [
+          {
+            type: 'text',
+            value: `Método de pago: ${sale.metodo_pago}`,
+            style: { textAlign: 'right', fontSize: "10px" }
+          }
+        ]),
+        // Footer
+        {
+          type: 'text',
+          value: '--------------------------------',
+          style: { textAlign: 'center', marginTop: '10px' }
+        },
+        {
+          type: 'text',
+          value: 'Gracias por su compra',
+          style: { textAlign: 'center', fontSize: "10px" }
+        },
+        {
+          type: 'text',
+          value: 'WILPOS - Sistema de Punto de Venta',
+          style: { textAlign: 'center', fontSize: "8px" }
+        }
+      ];
+      
+      // Print options
+      const options = {
+        preview: false,
+        margin: '0 0 0 0',
+        copies: 1,
+        printerName: this.printerName,
+        timeOutPerLine: 400,
+        pageSize: this.paperSize
+      };
+      
+      // Send to printer
+      const result = await window.api.printWithPosPrinter(printData, options);
+      
+      if (!result.success) {
+        throw new Error(result.error || 'Error al imprimir');
+      }
+      
+      return { success: true, message: 'Impresión enviada a la impresora térmica' };
+    } catch (error) {
+      console.error('Error in POS printing:', error);
+      // If specialized printing fails, fall back to standard printing
+      return this.printReceipt(sale);
     }
   }
 }
