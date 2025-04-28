@@ -1,5 +1,5 @@
 // main.js - ES Module version
-import { app, BrowserWindow, ipcMain, dialog, shell } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, shell, session } from 'electron';
 import path, { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs-extra';
@@ -306,6 +306,10 @@ function setupAllHandlers(ipcMain, app) {
 // =====================================================
 app.whenReady().then(async () => {
   try {
+    // Limpia el cache antes de crear la ventana
+    await session.defaultSession.clearCache();
+    console.log('🧹 Caché de sesión borrada');
+
     await initializeDatabase();
     setupIpcHandlers();
     setupWindowControls();
@@ -334,14 +338,6 @@ app.on('window-all-closed', () => {
   app.quit()
   process.exit(0)
 })
-
-// Make sure the app actually quits and doesn't hang
-app.on('quit', () => {
-  // Forcibly exit the process if needed
-  setTimeout(() => {
-    process.exit(0);
-  }, 1000);
-});
 
 // Cleanup before quitting
 app.on('before-quit', () => {
