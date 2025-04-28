@@ -267,61 +267,55 @@ function createMainWindow() {
 }
 
 // =====================================================
-// Printing and PDF Handlers
+// Unified handler setup
 // =====================================================
+function setUpAllHandlers(ipcMain, app) {
+  const safeHandle = (channel, handler) => {
+    try {
+      ipcMain.removeHandler(channel)
+    } catch {}
+    ipcMain.handle(channel, handler)
+    console.log(`Registered handler for ${channel}`)
+  }
 
-ipcMain.handle('get-printers', () => getPrinters());
-
-ipcMain.handle('print', async (_, options) => {
-  return await printWithThermalPrinter(options);
-});
-
-ipcMain.handle('savePdf', async (_, options) => {
-  return await savePdfHandler(options);
-});
+  safeHandle('get-printers', async () => getPrinters())
+  safeHandle('print',        async (_, opts) => await printWithThermalPrinter(opts))
+  safeHandle('savePdf',      async (_, opts) => await savePdfHandler(opts))
+}
 
 // =====================================================
 // Application Lifecycle
 // =====================================================
-
 app.whenReady().then(async () => {
   try {
-    // Initialize the database
-    await initializeDatabase();
+    await initializeDatabase()
+    setupWindowControls()
+    setupIpcHandlers()
 
-    // Set up window controls
-    setupWindowControls();
+    // instead of setupThermalPrintingHandlers:
+    setUpAllHandlers(ipcMain, app)
 
-    // Set up database IPC handlers
-    setupIpcHandlers();
+    createMainWindow()
 
-    // Set up thermal printing handlers
-    setupThermalPrintingHandlers(ipcMain, app);
-
-    // Create the main window
-    createMainWindow();
-
-    // Handle macOS activation
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) {
-        createMainWindow();
+        createMainWindow()
       }
-    });
+    })
   } catch (error) {
-    console.error('Application startup error:', error);
-    app.quit();
+    console.error('Application startup error:', error)
+    app.quit()
   }
-}).catch(error => {
-  console.error("Fatal error during application startup:", error);
-  app.quit();
-});
+})
 
-// Handle window closing
+// =====================================================
+// Ensure full exit when last window closes
+// =====================================================
 app.on('window-all-closed', () => {
-  console.log('All windows closed, shutting down application');
-  // Force app to quit even on macOS (standard behavior would keep it running)
-  app.quit();
-});
+  console.log('All windows closed, shutting down application')
+  app.quit()
+  process.exit(0)
+})
 
 // Make sure the app actually quits and doesn't hang
 app.on('quit', () => {

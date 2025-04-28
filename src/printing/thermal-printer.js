@@ -203,115 +203,80 @@ export async function printWithElectron(options, tempHtmlPath) {
 export function setupThermalPrintingHandlers(ipcMain, app) {
   console.log("🖨️ Setting up thermal printing handlers...");
 
-  // Logging middleware for print requests
-  const logPrintRequest = (options) => {
-    console.log(`Print request for printer: ${options.printerName || 'default'}`);
-    console.log(`Paper size: ${options.options?.width || 'standard'}`);
-    console.log(`Silent mode: ${options.silent}`);
+  // Safe handler registration function
+  const safeRegisterHandler = (channel, handler) => {
+    try {
+      ipcMain.removeHandler(channel);
+      ipcMain.handle(channel, handler);
+      console.log(`Registered handler for ${channel}`);
+    } catch (error) {
+      console.warn(`Error registering handler for ${channel}:`, error);
+    }
   };
 
-  // Handler for print requests
-  ipcMain.handle('printInvoice', async (event, options) => {
-    try {
-      logPrintRequest(options);
-      
-      // Create temp directory for print jobs
-      const tempDir = path.join(app.getPath('temp'), 'wilpos-prints');
-      await fs.ensureDir(tempDir);
-      const tempHtmlPath = path.join(tempDir, `print-${Date.now()}.html`);
-      
-      // Write HTML to temp file
-      await fs.writeFile(tempHtmlPath, options.html);
-      
-      let result;
-      
-      // Use appropriate print method based on options
-      if (options.options?.thermalPrinter) {
-        result = await printWithThermalPrinter(options, tempHtmlPath);
-      } else {
-        result = await printWithElectron(options, tempHtmlPath);
-      }
-      
-      // Clean up temp file after printing
-      fs.unlink(tempHtmlPath).catch(() => {});
-      
-      return result;
-    } catch (error) {
-      console.error('Print handler error:', error);
-      return { 
-        success: false, 
-        error: error.message 
-      };
-    }
-  });
-
-  // Handler for getting printers
-  ipcMain.handle('getPrinters', async (event) => {
+  // Register 'getPrinters'
+  safeRegisterHandler('getPrinters', async () => {
     console.log("Getting printer list...");
     return getPrinters();
   });
 
-  // Handler for PDF generation
-  ipcMain.handle('savePdf', async (event, options) => {
-    try {
-      if (!options.html || !options.path) {
-        throw new Error('Missing required parameters: html and path');
-      }
-      
-      console.log(`Generating PDF at: ${options.path}`);
-      
-      // Create directory if needed
-      const pdfDir = path.dirname(options.path);
-      await fs.ensureDir(pdfDir);
-      
-      // Create temp HTML file
-      const tempDir = path.join(app.getPath('temp'), 'wilpos-pdf');
-      await fs.ensureDir(tempDir);
-      const tempHtmlPath = path.join(tempDir, `pdf-${Date.now()}.html`);
-      await fs.writeFile(tempHtmlPath, options.html);
-      
-      // Configure PDF window
-      const pdfWindow = new BrowserWindow({
-        show: false,
-        webPreferences: {
-          contextIsolation: true,
-          nodeIntegration: false
-        }
-      });
-      
-      await pdfWindow.loadFile(tempHtmlPath);
-      
-      // PDF generation options
-      const pdfOptions = {
-        printBackground: options.options?.printBackground !== false,
-        margins: options.options?.margins || {
-          top: 0.4,
-          bottom: 0.4,
-          left: 0.4,
-          right: 0.4
-        },
-        pageSize: options.options?.pageSize || 'A4'
-      };
-      
-      // Generate and save PDF
-      const pdfData = await pdfWindow.webContents.printToPDF(pdfOptions);
-      await fs.writeFile(options.path, pdfData);
-      
-      // Clean up
-      pdfWindow.close();
-      await fs.unlink(tempHtmlPath).catch(() => {});
-      
-      return {
-        success: true,
-        path: options.path
-      };
-    } catch (error) {
-      console.error('PDF generation error:', error);
-      return {
-        success: false,
-        error: error.message
-      };
+  // Register 'printInvoice'
+  safeRegisterHandler('printInvoice', async (event, options) => {
+    console.log(`Print request for printer: ${options.printerName || 'default'}`);
+    console.log(`Paper size: ${options.options?.width || 'standard'}`);
+    console.log(`Silent mode: ${options.silent}`);
+
+    const tempDir = path.join(app.getPath('temp'), 'wilpos-prints');
+    await fs.ensureDir(tempDir);
+    const tempHtmlPath = path.join(tempDir, `print-${Date.now()}.html`);
+    await fs.writeFile(tempHtmlPath, options.html);
+
+    let result;
+    if (options.options?.thermalPrinter) {
+      result = await printWithThermalPrinter(options, tempHtmlPath);
+    } else {
+      result = await printWithElectron(options, tempHtmlPath);
     }
+
+    fs.unlink(tempHtmlPath).catch(() => {});
+    return result;
+  });
+
+  // Register 'savePdf'
+  safeRegisterHandler('savePdf', async (event, options) => {
+    if (!options.html || !options.path) {
+      throw new Error('Missing required parameters: html and path');
+    }
+
+    console.log(`Generating PDF at: ${options.path}`);
+    const pdfDir = path.dirname(options.path);
+    await fs.ensureDir(pdfDir);
+
+    const tempDir = path.join(app.getPath('temp'), 'wilpos-pdf');
+    await fs.ensureDir(tempDir);
+    const tempHtmlPath = path.join(tempDir, `pdf-${Date.now()}.html`);
+    await fs.writeFile(tempHtmlPath, options.html);
+
+    const pdfWindow = new BrowserWindow({
+      show: false,
+      webPreferences: {
+        contextIsolation: true,
+        nodeIntegration: false
+      }
+    });
+    await pdfWindow.loadFile(tempHtmlPath);
+
+    const pdfOptions = {
+      printBackground: options.options?.printBackground !== false,
+      margins: options.options?.margins || { top: 0.4, bottom: 0.4, left: 0.4, right: 0.4 },
+      pageSize: options.options?.pageSize || 'A4'
+    };
+    const pdfData = await pdfWindow.webContents.printToPDF(pdfOptions);
+    await fs.writeFile(options.path, pdfData);
+
+    pdfWindow.close();
+    await fs.unlink(tempHtmlPath).catch(() => {});
+    return { success: true, path: options.path };
   });
 }
 
