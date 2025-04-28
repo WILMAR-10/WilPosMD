@@ -195,6 +195,47 @@ export async function printWithElectron(options, tempHtmlPath) {
 }
 
 /**
+ * Save HTML as PDF
+ * @param {Object} options – { html: string, path: string, options?: { printBackground, margins, pageSize } }
+ * @returns {Promise<{success: boolean, path: string}>}
+ */
+export async function savePdf(options) {
+  if (!options.html || !options.path) {
+    throw new Error('Missing required parameters: html and path');
+  }
+  console.log(`Generating PDF at: ${options.path}`);
+  const pdfDir = path.dirname(options.path);
+  await fs.ensureDir(pdfDir);
+
+  const tempDir = path.join(app.getPath('temp'), 'wilpos-pdf');
+  await fs.ensureDir(tempDir);
+  const tempHtmlPath = path.join(tempDir, `pdf-${Date.now()}.html`);
+  await fs.writeFile(tempHtmlPath, options.html);
+
+  const pdfWindow = new BrowserWindow({
+    show: false,
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false
+    }
+  });
+  await pdfWindow.loadFile(tempHtmlPath);
+
+  const pdfOptions = {
+    printBackground: options.options?.printBackground !== false,
+    margins: options.options?.margins || { top: 0.4, bottom: 0.4, left: 0.4, right: 0.4 },
+    pageSize: options.options?.pageSize || 'A4'
+  };
+  const pdfData = await pdfWindow.webContents.printToPDF(pdfOptions);
+  await fs.writeFile(options.path, pdfData);
+
+  pdfWindow.close();
+  await fs.unlink(tempHtmlPath).catch(() => {});
+
+  return { success: true, path: options.path };
+}
+
+/**
  * Setup IPC handlers for thermal printing and PDF generation
  * This can be imported and called in main.js
  * @param {Object} ipcMain - Electron's ipcMain module
@@ -284,5 +325,6 @@ export default {
   getPrinters,
   printWithElectron,
   printWithThermalPrinter,
+  savePdf,
   setupThermalPrintingHandlers
 };

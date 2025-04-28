@@ -40,9 +40,9 @@ import {
 
 // Import printing functions
 import { 
-  printWithThermalPrinter,
-  getPrinters,
-  setupThermalPrintingHandlers
+  printWithThermalPrinter, 
+  getPrinters, 
+  savePdf      // this name must match the export in thermal-printer.js
 } from './src/printing/thermal-printer.js';
 
 // Set up directory paths
@@ -269,18 +269,36 @@ function createMainWindow() {
 // =====================================================
 // Unified handler setup
 // =====================================================
-function setUpAllHandlers(ipcMain, app) {
-  const safeHandle = (channel, handler) => {
+function setupAllHandlers(ipcMain, app) {
+  const safeRegister = (channel, handler) => {
     try {
-      ipcMain.removeHandler(channel)
+      ipcMain.removeHandler(channel);
     } catch {}
-    ipcMain.handle(channel, handler)
-    console.log(`Registered handler for ${channel}`)
-  }
+    ipcMain.handle(channel, handler);
+    console.log(`Registered handler for ${channel}`);
+  };
 
-  safeHandle('get-printers', async () => getPrinters())
-  safeHandle('print',        async (_, opts) => await printWithThermalPrinter(opts))
-  safeHandle('savePdf',      async (_, opts) => await savePdfHandler(opts))
+  // Printers list
+  safeRegister('get-printers', async () => {
+    return await getPrinters();
+  });
+
+  // Thermal print job
+  safeRegister('print', async (_, options) => {
+    return await printWithThermalPrinter(options);
+  });
+
+  // Save HTML as PDF
+  safeRegister('save-pdf', async (_, options) => {
+    return await savePdf(options);
+  });
+
+  // Return default PDF folder
+  safeRegister('get-pdf-path', async () => {
+    const dir = path.join(app.getPath('documents'), 'WilPOS', 'Facturas');
+    await fs.ensureDir(dir);
+    return dir;
+  });
 }
 
 // =====================================================
@@ -288,25 +306,25 @@ function setUpAllHandlers(ipcMain, app) {
 // =====================================================
 app.whenReady().then(async () => {
   try {
-    await initializeDatabase()
-    setupWindowControls()
-    setupIpcHandlers()
+    await initializeDatabase();
+    setupIpcHandlers();
+    setupWindowControls();
 
-    // instead of setupThermalPrintingHandlers:
-    setUpAllHandlers(ipcMain, app)
+    // Use unified handler setup instead of setupThermalPrintingHandlers
+    setupAllHandlers(ipcMain, app);
 
-    createMainWindow()
+    createMainWindow();
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) {
-        createMainWindow()
+        createMainWindow();
       }
-    })
+    });
   } catch (error) {
-    console.error('Application startup error:', error)
-    app.quit()
+    console.error('Application startup error:', error);
+    app.quit();
   }
-})
+});
 
 // =====================================================
 // Ensure full exit when last window closes

@@ -108,7 +108,10 @@ contextBridge.exposeInMainWorld('api', {
   
   broadcastSyncEvent: (event) => {
     ipcRenderer.send('broadcast-sync-event', event);
-  }
+  },
+
+  // New PDF helper
+  getPDFPath: () => ipcRenderer.invoke('get-pdf-path')
 });
 
 // Expose app state management
@@ -119,47 +122,47 @@ contextBridge.exposeInMainWorld('electron', {
   }
 });
 
-// Replace both the api.getPrinters and electronPrinter implementations with this
+// Expose unified printer API
 contextBridge.exposeInMainWorld('printerApi', {
-  getPrinters: wrapApiMethod(async () => {
+  // Get list of available printers
+  getPrinters: async () => {
     try {
-      const result = await ipcRenderer.invoke('get-printers');
-      console.log('Printers retrieved:', result);
-      return result;
+      return await ipcRenderer.invoke('get-printers');
     } catch (error) {
       console.error('Failed to get printers:', error);
-      throw error; // Will be caught by wrapApiMethod
+      return { success: false, error: error.message || 'Unknown error', printers: [] };
     }
-  }, 'getPrinters'),
-  
-  print: wrapApiMethod(async (options) => {
-    // Validate options
-    if (!options || !options.html) {
-      return { 
-        success: false, 
-        error: 'Invalid print options: html content is required' 
-      };
+  },
+
+  // Send print job
+  print: async (options) => {
+    if (!options?.html) {
+      return { success: false, error: 'Invalid print options: html content is required' };
     }
-    
     console.log('Sending print request:', {
       printer: options.printerName || 'default',
       silent: options.silent,
       thermal: options.options?.thermalPrinter
     });
-    
-    return await ipcRenderer.invoke('print', options);
-  }, 'print'),
-  
-  savePdf: wrapApiMethod(async (options) => {
-    // Validate options
-    if (!options || !options.html || !options.path) {
-      return { 
-        success: false, 
-        error: 'Invalid PDF options: html and path are required' 
-      };
+    try {
+      return await ipcRenderer.invoke('print', options);
+    } catch (error) {
+      console.error('Error during print operation:', error);
+      return { success: false, error: error.message || 'Unknown error during printing' };
     }
-    
+  },
+
+  // Save HTML as PDF
+  savePdf: async (options) => {
+    if (!options?.html || !options?.path) {
+      return { success: false, error: 'Invalid PDF options: html and path are required' };
+    }
     console.log('Saving PDF to:', options.path);
-    return await ipcRenderer.invoke('savePdf', options);
-  }, 'savePdf')
+    try {
+      return await ipcRenderer.invoke('savePdf', options);
+    } catch (error) {
+      console.error('Error saving PDF:', error);
+      return { success: false, error: error.message || 'Unknown error saving PDF' };
+    }
+  }
 });
