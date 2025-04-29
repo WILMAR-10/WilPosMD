@@ -41,8 +41,8 @@ import {
 // Import printing functions
 import { 
   printWithThermalPrinter, 
-  getPrinters, 
-  savePdf      // this name must match the export in thermal-printer.js
+  getPrinters as detectPrinters,   // <-- renombramos aquí
+  savePdf      
 } from './src/printing/thermal-printer.js';
 
 // Set up directory paths
@@ -271,16 +271,15 @@ function createMainWindow() {
 // =====================================================
 function setupAllHandlers(ipcMain, app) {
   const safeRegister = (channel, handler) => {
-    try {
-      ipcMain.removeHandler(channel);
-    } catch {}
+    try { ipcMain.removeHandler(channel) } catch {}
     ipcMain.handle(channel, handler);
     console.log(`Registered handler for ${channel}`);
   };
 
   // Printers list
   safeRegister('get-printers', async () => {
-    return await getPrinters();
+    // delegamos toda la detección (incluye fallback a detectCommonPrinters)
+    return await detectPrinters();
   });
 
   // Thermal print job
@@ -299,7 +298,26 @@ function setupAllHandlers(ipcMain, app) {
     await fs.ensureDir(dir);
     return dir;
   });
+
+  // Print raw text using node-thermal-printer
+  safeRegister('print-raw', async (_, { texto, iface }) => {
+    const printer = new ThermalPrinter({
+      type: PrinterTypes.EPSON,
+      interface: iface // e.g. 'USB' or exact path
+    });
+    printer.alignCenter();
+    printer.println(texto);
+    printer.cut();
+    const success = await printer.execute();
+    return { success };
+  });
 }
+
+// Handle printers retrieval
+ipcMain.handle('get-printers', (event) => {
+  // ← returns the same list you'd see in File→Print
+  return event.sender.getPrinters();
+});
 
 // =====================================================
 // Application Lifecycle

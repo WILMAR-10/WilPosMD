@@ -142,7 +142,7 @@ export interface Settings {
   email?: string;
   rnc?: string;
   sitio_web?: string;
-  logo?: string;
+  logo?: string; // now this is string | undefined
   mensaje_recibo?: string;
   moneda?: string;
   formato_fecha?: string;
@@ -150,7 +150,7 @@ export interface Settings {
   impuesto_porcentaje?: number;
   impresora_termica?: string;
   guardar_pdf?: boolean;
-  ruta_pdf?: string;
+  ruta_pdf?: string; // same if you clear ruta_pdf to undefined
   tema?: string;
   tipo_impresora?: 'normal' | 'termica' | 'termica58'; 
   ultima_modificacion?: string;

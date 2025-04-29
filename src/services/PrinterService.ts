@@ -17,19 +17,12 @@ export class PrinterService {
   /**
    * Gets all available printers
    */
-  async getPrinters(): Promise<{ printers: any[] }> {
-    try {
-      if (window.printerApi?.getPrinters) {
-        const result = await window.printerApi.getPrinters()
-        if (result.success) {
-          return { printers: result.printers }
-        }
-      }
-      console.warn('No printer API available')
-      return { printers: [] }
-    } catch (error) {
-      console.error('Error getting printers:', error)
-      return { printers: [] }
+  async getPrinters(){
+    if (window.printerApi && typeof window.printerApi.getPrinters === 'function') {
+      return await window.printerApi.getPrinters();
+    } else {
+      console.warn('No printer API available');
+      return [];
     }
   }
 

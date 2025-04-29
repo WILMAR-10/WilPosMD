@@ -1,4 +1,4 @@
-// preload.cjs - Modificado para mejorar soporte de impresión
+// preload.cjs
 const { contextBridge, ipcRenderer } = require('electron');
 
 // Función para envolver métodos de API con manejo de errores
@@ -124,45 +124,9 @@ contextBridge.exposeInMainWorld('electron', {
 
 // Expose unified printer API
 contextBridge.exposeInMainWorld('printerApi', {
-  // Get list of available printers
-  getPrinters: async () => {
-    try {
-      return await ipcRenderer.invoke('get-printers');
-    } catch (error) {
-      console.error('Failed to get printers:', error);
-      return { success: false, error: error.message || 'Unknown error', printers: [] };
-    }
-  },
-
-  // Send print job
-  print: async (options) => {
-    if (!options?.html) {
-      return { success: false, error: 'Invalid print options: html content is required' };
-    }
-    console.log('Sending print request:', {
-      printer: options.printerName || 'default',
-      silent: options.silent,
-      thermal: options.options?.thermalPrinter
-    });
-    try {
-      return await ipcRenderer.invoke('print', options);
-    } catch (error) {
-      console.error('Error during print operation:', error);
-      return { success: false, error: error.message || 'Unknown error during printing' };
-    }
-  },
-
-  // Save HTML as PDF
-  savePdf: async (options) => {
-    if (!options?.html || !options?.path) {
-      return { success: false, error: 'Invalid PDF options: html and path are required' };
-    }
-    console.log('Saving PDF to:', options.path);
-    try {
-      return await ipcRenderer.invoke('savePdf', options);
-    } catch (error) {
-      console.error('Error saving PDF:', error);
-      return { success: false, error: error.message || 'Unknown error saving PDF' };
-    }
-  }
+  getPrinters: ()    => ipcRenderer.invoke('get-printers'),
+  print:       opts  => ipcRenderer.invoke('print', opts),
+  savePdf:     opts  => ipcRenderer.invoke('save-pdf', opts),
+  getPdfPath:  ()    => ipcRenderer.invoke('get-pdf-path'),
+  printRaw:    (texto, iface) => ipcRenderer.invoke('print-raw', { texto, iface })
 });

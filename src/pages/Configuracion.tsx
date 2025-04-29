@@ -182,7 +182,10 @@ const Configuracion: React.FC = () => {
   const handleRemoveLogo = () => {
     setLogoPreview(null);
     setImageFile(null);
-    setFormData({ ...formData, logo: undefined });
+    setFormData(prev => ({
+      ...prev,
+      logo: ''      // ← empty string, stays a string
+    }));
   };
   
   // Guardar configuración
@@ -386,14 +389,16 @@ const Configuracion: React.FC = () => {
       const result = await thermalService.testPrinter();
       setAlert({
         type: result.success ? 'success' : 'error',
-        message: result.message
+        // ensure message is a string:
+        message: result.message ?? 'Sin respuesta de la impresora'
       });
     } catch (error) {
       console.error('Error probando impresora térmica:', error);
       setAlert({
         type: 'error',
-        message: 'Error al probar impresora: ' +
-                 (error instanceof Error ? error.message : 'Error desconocido')
+        message:
+          'Error al probar impresora: ' +
+          (error instanceof Error ? error.message : 'Error desconocido')
       });
     }
   };
