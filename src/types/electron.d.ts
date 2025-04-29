@@ -103,7 +103,6 @@ interface SaleWithDetails {
   cliente?: string;
   total: number;
   detalles: SaleDetail[];
-  // ...other properties
 }
 
 interface ApiResponse {
@@ -183,6 +182,7 @@ export interface PrinterInfo {
   description?: string;
   isDefault?: boolean;
   isThermal?: boolean;
+  status?: number; // added optional status
 }
 
 declare global {
@@ -310,6 +310,12 @@ declare global {
       getPrinters: () => Promise<{ success: boolean; printers: PrinterInfo[]; error?: string }>;
       print: (opts: any) => Promise<{ success: boolean; error?: string }>;
       savePdf: (opts: any) => Promise<{ success: boolean; path?: string; error?: string }>;
+      getPdfPath?: () => Promise<string | null>;
+      printRaw?: (texto: string, printerName?: string) => Promise<{
+        success: boolean;
+        message?: string;
+        error?: string;
+      }>;
     };
     electron?: {
       app: {

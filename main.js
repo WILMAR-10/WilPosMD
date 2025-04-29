@@ -24,6 +24,7 @@ try {
   ThermalPrinter = class {
     constructor() {}
     async isPrinterConnected() { return false; }
+    write() {}
     async execute() { return false; }
   };
   PrinterTypes = { EPSON: 'epson', STAR: 'star' };
@@ -299,19 +300,107 @@ function setupAllHandlers(ipcMain, app) {
     return dir;
   });
 
-  // Print raw text using node-thermal-printer
-  safeRegister('print-raw', async (_, { texto, iface }) => {
-    const printer = new ThermalPrinter({
-      type: PrinterTypes.EPSON,
-      interface: iface // e.g. 'USB' or exact path
-    });
-    printer.alignCenter();
-    printer.println(texto);
-    printer.cut();
-    const success = await printer.execute();
-    return { success };
+  // Replace raw printing handler
+  safeRegister('print-raw', async (_, { texto, printerName }) => {
+    console.log(`Raw print request received for printer: ${printerName || 'Default'}`);
+    try {
+      if (ThermalPrinter) {
+        const printer = new ThermalPrinter({
+          type: PrinterTypes.EPSON,
+          interface: printerName || 'Printer',
+          options: { timeout: 5000 },
+          width: 48,
+          characterSet: CharacterSet.PC850_MULTILINGUAL
+        });
+
+        // check connection if supported
+        try {
+          const isConnected = await printer.isPrinterConnected();
+          console.log(`Printer connected: ${isConnected}`);
+          if (!isConnected) throw new Error('Printer not connected');
+        } catch (connectError) {
+          console.warn('Error checking printer connection:', connectError);
+        }
+
+        // write and execute
+        printer.write(texto);
+        const success = await printer.execute();
+        console.log(`Raw print result: ${success ? 'Success' : 'Failed'}`);
+        return { success, message: success ? 'Printed successfully' : 'Failed to print' };
+      } else {
+        throw new Error('Thermal printer module not available');
+      }
+    } catch (error) {
+      console.error('Raw printing error:', error);
+      // fallback: render plain text HTML and print
+      try {
+        console.log('Trying fallback method for raw printing');
+        const htmlContent = `
+          <!DOCTYPE html>
+          <html>
+          <head>
+            <meta charset="UTF-8">
+            <title>Raw Print</title>
+            <style>
+              @page { margin: 0; size: 80mm auto; }
+              body {
+                font-family: monospace;
+                white-space: pre;
+                font-size: 9pt;
+                width: 72mm;
+                margin: 0;
+                padding: 3mm;
+              }
+            </style>
+          </head>
+          <body>${texto.replace(/[\x00-\x1F]/g, '')}</body>
+          </html>
+        `;
+        return await printWithThermalPrinter({
+          html: htmlContent,
+          printerName,
+          silent: true
+        });
+      } catch (fallbackError) {
+        console.error('Fallback printing failed:', fallbackError);
+        return { success: false, error: `Printing failed: ${error.message || 'Unknown error'}` };
+      }
+    }
   });
 }
+
+// Add this handler after your other ipcMain.handle registrations:
+ipcMain.handle('print-raw', async (_, { texto, printerName }) => {
+  console.log(`Raw print request received: printer=${printerName || 'Default'}`);
+  try {
+    if (ThermalPrinter) {
+      const printer = new ThermalPrinter({
+        type: PrinterTypes.EPSON,
+        interface: printerName || 'Printer',
+        options: { timeout: 8000 },
+        width: 48,
+        characterSet: CharacterSet.PC850_MULTILINGUAL
+      });
+      try {
+        const ok = await printer.isPrinterConnected();
+        console.log(`Printer connected: ${ok}`);
+      } catch {/* ignore */}
+      printer.write(texto);
+      const success = await printer.execute();
+      console.log(`Raw print result: ${success}`);
+      return { success, message: success ? 'Printed successfully' : 'Failed to print' };
+    }
+    throw new Error('ThermalPrinter module unavailable');
+  } catch (error) {
+    console.error('Raw printing error:', error);
+    // fallback to HTML‑based print
+    const html = `
+      <html><body style="white-space:pre;font-family:monospace">
+      ${texto.replace(/[\x00-\x1F]/g, '')}
+      </body></html>`;
+    return await printWithThermalPrinter({ html, printerName, silent: true });
+  }
+});
 
 // =====================================================
 // Enhance Electron Print Handlers

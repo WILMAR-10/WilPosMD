@@ -126,56 +126,65 @@ contextBridge.exposeInMainWorld('electron', {
 contextBridge.exposeInMainWorld('printerApi', {
   getPrinters: async () => {
     try {
-      const result = await ipcRenderer.invoke('get-printers')
-      if (result && typeof result === 'object') return result
-      console.warn('Invalid printers response, returning fallback')
+      const result = await ipcRenderer.invoke('get-printers');
+      if (result && typeof result === 'object') return result;
+      console.warn('Invalid printers response, returning fallback');
       return {
         success: true,
         printers: [
           { name: 'Microsoft Print to PDF', isDefault: true, isThermal: false },
-          { name: 'EPSON TM-T88V', isDefault: false, isThermal: true }
+          { name: 'POS-80',             isDefault: false, isThermal: true  }
         ]
-      }
+      };
     } catch (error) {
-      console.error('Error in getPrinters:', error)
+      console.error('Error in getPrinters:', error);
       return {
         success: true,
-        error: error.message,
-        printers: [{ name: 'Microsoft Print to PDF', isDefault: true, isThermal: false }]
-      }
+        error:   error.message || 'Unknown error',
+        printers:[
+          { name: 'Microsoft Print to PDF', isDefault: true, isThermal: false }
+        ]
+      };
     }
   },
   print: opts => {
     try {
-      return ipcRenderer.invoke('print', opts).catch(err => ({ success: false, error: err.message }))
+      return ipcRenderer.invoke('print', opts)
+        .catch(err => ({ success: false, error: err.message || 'Unknown error' }));
     } catch (error) {
-      console.error('Print error:', error)
-      return Promise.resolve({ success: false, error: error.message })
+      console.error('Print error:', error);
+      return Promise.resolve({ success: false, error: error.message || 'Unknown error' });
     }
   },
   savePdf: opts => {
     try {
-      return ipcRenderer.invoke('save-pdf', opts).catch(err => ({ success: false, error: err.message }))
+      return ipcRenderer.invoke('save-pdf', opts)
+        .catch(err => ({ success: false, error: err.message || 'Unknown error' }));
     } catch (error) {
-      console.error('Save PDF error:', error)
-      return Promise.resolve({ success: false, error: error.message })
+      console.error('Save PDF error:', error);
+      return Promise.resolve({ success: false, error: error.message || 'Unknown error' });
     }
   },
   getPdfPath: () => {
     try {
-      return ipcRenderer.invoke('get-pdf-path').catch(() => null)
+      return ipcRenderer.invoke('get-pdf-path').catch(() => null);
     } catch (error) {
-      console.error('Get PDF path error:', error)
-      return Promise.resolve(null)
+      console.error('Get PDF path error:', error);
+      return Promise.resolve(null);
     }
   },
-  printRaw: (texto, iface) => {
+  printRaw: (texto, printerName) => {
     try {
-      return ipcRenderer.invoke('print-raw', { texto, iface })
-        .catch(err => ({ success: false, error: err.message }))
+      console.log(`Sending raw ESC/POS commands to printer: ${printerName || 'Default'}`);
+      console.log(`Raw command length: ${texto.length} bytes`);
+      return ipcRenderer.invoke('print-raw', { texto, printerName })
+        .catch(err => {
+          console.error('Raw print error:', err);
+          return { success: false, error: err.message || 'Unknown error' };
+        });
     } catch (error) {
-      console.error('Print raw error:', error)
-      return Promise.resolve({ success: false, error: error.message })
+      console.error('Print raw error:', error);
+      return Promise.resolve({ success: false, error: error.message || 'Unknown error' });
     }
   }
 });
