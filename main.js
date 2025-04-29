@@ -42,7 +42,7 @@ import {
 // Import printing functions
 import { 
   printWithThermalPrinter, 
-  getPrinters as detectPrinters,   // <-- renombramos aquí
+  getPrinters, 
   savePdf      
 } from './src/printing/thermal-printer.js';
 
@@ -274,73 +274,91 @@ function setupAllHandlers(ipcMain, app) {
   const safeRegister = (channel, handler) => {
     try { ipcMain.removeHandler(channel) } catch {}
     ipcMain.handle(channel, handler);
-    console.log(`Registered handler for ${channel}`);
+    console.log(`Registrado manejador para ${channel}`);
   };
 
-  // Printers list
+  // Obtener lista de impresoras (mejorado con USB/Serial)
   safeRegister('get-printers', async () => {
-    // delegamos toda la detección (incluye fallback a detectCommonPrinters)
-    return await detectPrinters();
+    return await getPrinters();
   });
 
-  // Thermal print job
+  // Impresión (térmica o estándar según el destino)
   safeRegister('print', async (_, options) => {
-    return await printWithThermalPrinter(options);
+    console.log(`Solicitud de impresión recibida para: ${options.printerName || 'Impresora predeterminada'}`);
+    const isThermal = options.options?.thermalPrinter === true ||
+      (options.printerName && /thermal|receipt|58mm|80mm|pos|epson|tm-/i.test(options.printerName));
+    try {
+      if (isThermal) {
+        console.log('Utilizando método de impresión térmica');
+        return await printWithThermalPrinter(options);
+      } else {
+        console.log('Utilizando método de impresión estándar');
+        return await printWithElectron(options);
+      }
+    } catch (error) {
+      console.error('Error de impresión:', error);
+      return { success: false, error: error.message || 'Error desconocido de impresión' };
+    }
   });
 
-  // Save HTML as PDF
+  // Guardar como PDF
   safeRegister('save-pdf', async (_, options) => {
-    return await savePdf(options);
+    try {
+      return await savePdf(options);
+    } catch (error) {
+      console.error('Error al guardar PDF:', error);
+      return { success: false, error: error.message || 'Error desconocido al guardar PDF' };
+    }
   });
 
-  // Return default PDF folder
+  // Devolver ruta predeterminada para PDFs
   safeRegister('get-pdf-path', async () => {
     const dir = path.join(app.getPath('documents'), 'WilPOS', 'Facturas');
     await fs.ensureDir(dir);
     return dir;
   });
 
-  // Replace raw printing handler
+  // Impresión de texto RAW para impresoras ESC/POS
   safeRegister('print-raw', async (_, { texto, printerName }) => {
-    console.log(`Raw print request received for printer: ${printerName || 'Default'}`);
+    console.log(`Impresión RAW solicitada para: ${printerName || 'Impresora predeterminada'}`);
     try {
-      if (ThermalPrinter) {
-        const printer = new ThermalPrinter({
-          type: PrinterTypes.EPSON,
-          interface: printerName || 'Printer',
-          options: { timeout: 5000 },
-          width: 48,
-          characterSet: CharacterSet.PC850_MULTILINGUAL
-        });
-
-        // check connection if supported
-        try {
-          const isConnected = await printer.isPrinterConnected();
-          console.log(`Printer connected: ${isConnected}`);
-          if (!isConnected) throw new Error('Printer not connected');
-        } catch (connectError) {
-          console.warn('Error checking printer connection:', connectError);
-        }
-
-        // write and execute
-        printer.write(texto);
-        const success = await printer.execute();
-        console.log(`Raw print result: ${success ? 'Success' : 'Failed'}`);
-        return { success, message: success ? 'Printed successfully' : 'Failed to print' };
-      } else {
-        throw new Error('Thermal printer module not available');
-      }
-    } catch (error) {
-      console.error('Raw printing error:', error);
-      // fallback: render plain text HTML and print
+      // Intentar con node-thermal-printer si está disponible
+      let success = false, message = '';
       try {
-        console.log('Trying fallback method for raw printing');
+        const thermPrinter = await import('node-thermal-printer').catch(() => {
+          const require = createRequire(import.meta.url);
+          return require('node-thermal-printer');
+        });
+        const ThermalPrinter = thermPrinter.printer || thermPrinter.default?.printer;
+        const PrinterTypes   = thermPrinter.types   || thermPrinter.default?.types;
+        if (ThermalPrinter && PrinterTypes) {
+          const printer = new ThermalPrinter({
+            type: PrinterTypes.EPSON,
+            interface: printerName || 'Printer',
+            options: { timeout: 5000 },
+            width: 48,
+            characterSet: 'PC850_MULTILINGUAL'
+          });
+          try {
+            const isConnected = await printer.isPrinterConnected();
+            console.log(`Impresora conectada: ${isConnected}`);
+            if (!isConnected) throw new Error('Impresora no conectada');
+          } catch { /* continúa de todas formas */ }
+          printer.write(texto);
+          success = await printer.execute();
+          message = success ? 'Impresión exitosa' : 'Fallo en impresión';
+          console.log(`Resultado de impresión RAW: ${success}`);
+          return { success, message };
+        }
+        throw new Error('Módulo de impresión térmica no disponible');
+      } catch (thermalError) {
+        console.warn('Error con node-thermal-printer, intentando método alternativo:', thermalError);
         const htmlContent = `
           <!DOCTYPE html>
           <html>
           <head>
             <meta charset="UTF-8">
-            <title>Raw Print</title>
+            <title>Impresión RAW</title>
             <style>
               @page { margin: 0; size: 80mm auto; }
               body {
@@ -359,48 +377,83 @@ function setupAllHandlers(ipcMain, app) {
         return await printWithThermalPrinter({
           html: htmlContent,
           printerName,
-          silent: true
+          silent: true,
+          options: { thermalPrinter: true }
         });
-      } catch (fallbackError) {
-        console.error('Fallback printing failed:', fallbackError);
-        return { success: false, error: `Printing failed: ${error.message || 'Unknown error'}` };
       }
+    } catch (error) {
+      console.error('Error en impresión RAW:', error);
+      return { success: false, error: `Fallo de impresión: ${error.message || 'Error desconocido'}` };
+    }
+  });
+
+  // Prueba de conectividad de impresora
+  safeRegister('test-printer', async (_, printerName) => {
+    console.log(`Probando impresora: ${printerName || 'Predeterminada'}`);
+    try {
+      const testHTML = `
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <meta charset="UTF-8">
+          <title>Prueba de Impresora</title>
+          <style>
+            @page { margin: 0; size: 80mm auto; }
+            body {
+              font-family: Arial, sans-serif;
+              text-align: center;
+              padding: 10mm;
+              width: 72mm;
+              margin: 0 auto;
+            }
+            .title {
+              font-size: 14pt;
+              font-weight: bold;
+              margin-bottom: 5mm;
+            }
+            .content { font-size: 10pt; margin-bottom: 5mm; }
+            .footer {
+              margin-top: 10mm;
+              font-size: 8pt;
+              border-top: 1px dashed #000;
+              padding-top: 2mm;
+            }
+          </style>
+        </head>
+        <body>
+          <div class="title">PÁGINA DE PRUEBA</div>
+          <div class="content">
+            <p>Prueba de impresora: ${printerName || 'Predeterminada'}</p>
+            <p>Fecha: ${new Date().toLocaleString()}</p>
+          </div>
+          <div class="footer">WilPOS - Sistema de Punto de Venta</div>
+        </body>
+        </html>
+      `;
+      return await printWithThermalPrinter({
+        html: testHTML,
+        printerName,
+        silent: true,
+        options: { thermalPrinter: true }
+      });
+    } catch (error) {
+      console.error('Error probando impresora:', error);
+      return { success: false, error: `Error probando impresora: ${error.message || 'Error desconocido'}` };
+    }
+  });
+
+  // Abrir carpeta en el sistema
+  safeRegister('openFolder', async (_, folderPath) => {
+    try {
+      await fs.ensureDir(folderPath);
+      await shell.openPath(folderPath);
+      return true;
+    } catch (error) {
+      console.error('Error abriendo carpeta:', error);
+      return false;
     }
   });
 }
-
-// Add this handler after your other ipcMain.handle registrations:
-ipcMain.handle('print-raw', async (_, { texto, printerName }) => {
-  console.log(`Raw print request received: printer=${printerName || 'Default'}`);
-  try {
-    if (ThermalPrinter) {
-      const printer = new ThermalPrinter({
-        type: PrinterTypes.EPSON,
-        interface: printerName || 'Printer',
-        options: { timeout: 8000 },
-        width: 48,
-        characterSet: CharacterSet.PC850_MULTILINGUAL
-      });
-      try {
-        const ok = await printer.isPrinterConnected();
-        console.log(`Printer connected: ${ok}`);
-      } catch {/* ignore */}
-      printer.write(texto);
-      const success = await printer.execute();
-      console.log(`Raw print result: ${success}`);
-      return { success, message: success ? 'Printed successfully' : 'Failed to print' };
-    }
-    throw new Error('ThermalPrinter module unavailable');
-  } catch (error) {
-    console.error('Raw printing error:', error);
-    // fallback to HTML‑based print
-    const html = `
-      <html><body style="white-space:pre;font-family:monospace">
-      ${texto.replace(/[\x00-\x1F]/g, '')}
-      </body></html>`;
-    return await printWithThermalPrinter({ html, printerName, silent: true });
-  }
-});
 
 // =====================================================
 // Enhance Electron Print Handlers
@@ -412,7 +465,7 @@ function enhanceElectronPrintHandlers() {
   ipcMain.handle('get-printers', async () => {
     try {
       // 1) try thermal-printer.js
-      const fromModule = await detectPrinters();
+      const fromModule = await getPrinters();
       if (fromModule?.printers) return fromModule;
 
       // 2) try webContents.getPrinters()

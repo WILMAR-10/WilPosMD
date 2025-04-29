@@ -305,6 +305,7 @@ declare global {
       registerSyncListener: () => void,
       unregisterSyncListener: () => void,
       broadcastSyncEvent: (event: SyncEvent) => void,
+      testPrinter: (printerName?: string) => Promise<PrintResult>,
     };
     printerApi: {
       getPrinters: () => Promise<{ success: boolean; printers: PrinterInfo[]; error?: string }>;

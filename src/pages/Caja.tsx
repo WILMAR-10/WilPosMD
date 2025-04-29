@@ -872,7 +872,7 @@ const Caja: React.FC = () => {
       <main className="flex-1 px-6 pb-8">
         <div className="flex flex-col xl:flex-row gap-6">
           {/* Panel de carrito (lado izquierdo en pantallas grandes) */}
-          <div className="xl:w-2/5 bg-white shadow-md overflow-hidden">
+          <div className="xl:w-2/5 bg-white rounded-md shadow-md overflow-hidden">
             <div className="p-4 border-b flex justify-between items-center">
               <h2 className="font-medium text-gray-800">Carrito de Compra</h2>
               <div className="flex gap-2">
