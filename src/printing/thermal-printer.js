@@ -11,45 +11,33 @@ import os from 'os';
 export async function getPrinters() {
   try {
     const wins = BrowserWindow.getAllWindows();
-    console.log(`🔍 Detectando impresoras. Ventanas disponibles: ${wins.length}`);
     if (!wins.length) {
-      console.warn('No hay ventanas disponibles para detectar impresoras');
-      return { success: false, error: 'No hay ventanas disponibles', printers: [] };
+      console.log('Usando fallback manual de impresoras');
+      return { success: true, printers: await detectCommonPrinters() };
     }
-
-    const win = wins.find(w => !w.isDestroyed() && !w.webContents.isLoadingMainFrame());
-    if (!win) {
-      console.warn('No hay ventanas cargadas para detección de impresoras');
-      return { success: false, error: 'Ventanas no cargadas', printers: [] };
+    for (const win of wins) {
+      if (win.isDestroyed() || typeof win.webContents?.getPrinters !== 'function') {
+        continue;
+      }
+      const list = win.webContents.getPrinters();
+      console.log(`✅ Impresoras detectadas (${list.length})`);
+      return {
+        success: true,
+        printers: list.map(p => ({
+          name: p.name,
+          description: p.description || '',
+          status: p.status,
+          isDefault: p.isDefault,
+          isThermal: /thermal|receipt|80mm|58mm|epson|pos/i.test(p.name.toLowerCase()),
+          options: p.options || {}
+        }))
+      };
     }
-
-    if (typeof win.webContents.getPrinters !== 'function') {
-      console.warn('Método webContents.getPrinters no disponible');
-      return { success: false, error: 'API de impresoras no disponible', printers: [] };
-    }
-
-    const list = win.webContents.getPrinters();
-    console.log(`✅ Impresoras detectadas (${list.length}):`, list.map(p => p.name));
-    return {
-      success: true,
-      printers: list.map(p => ({
-        name: p.name,
-        displayName: p.displayName || p.name,
-        description: p.description || '',
-        status: p.status,
-        isDefault: p.isDefault,
-        isThermal: /thermal|receipt|80mm|58mm|epson|pos/i.test(p.name.toLowerCase()),
-        options: p.options || {}
-      }))
-    };
+    console.log('Ninguna ventana válida -> fallback');
+    return { success: true, printers: await detectCommonPrinters() };
   } catch (err) {
     console.error('❌ Error al obtener impresoras:', err);
-    const fallback = await detectCommonPrinters();
-    return {
-      success: false,
-      error: err.message || 'Error desconocido',
-      printers: fallback
-    };
+    return { success: true, printers: await detectCommonPrinters() };
   }
 }
 

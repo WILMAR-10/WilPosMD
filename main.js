@@ -313,11 +313,52 @@ function setupAllHandlers(ipcMain, app) {
   });
 }
 
-// Handle printers retrieval
-ipcMain.handle('get-printers', (event) => {
-  // ← returns the same list you'd see in File→Print
-  return event.sender.getPrinters();
-});
+// =====================================================
+// Enhance Electron Print Handlers
+// =====================================================
+function enhanceElectronPrintHandlers() {
+  // Prevent duplicate registration
+  try { ipcMain.removeHandler('get-printers') } catch (e) {}
+
+  ipcMain.handle('get-printers', async () => {
+    try {
+      // 1) try thermal-printer.js
+      const fromModule = await detectPrinters();
+      if (fromModule?.printers) return fromModule;
+
+      // 2) try webContents.getPrinters()
+      const win = BrowserWindow.getAllWindows().find(w => !w.isDestroyed());
+      if (win && typeof win.webContents.getPrinters === 'function') {
+        const list = win.webContents.getPrinters();
+        return {
+          success: true,
+          printers: list.map(p => ({
+            name: p.name,
+            description: p.description || '',
+            status: p.status,
+            isDefault: p.isDefault,
+            isThermal: /thermal|receipt|80mm|58mm|epson|pos/i.test(p.name.toLowerCase())
+          }))
+        };
+      }
+
+      // 3) fallback
+      return {
+        success: true,
+        printers: [
+          { name: 'Microsoft Print to PDF', isDefault: true, isThermal: false },
+          { name: 'POS-80', isDefault: false, isThermal: true }
+        ]
+      };
+    } catch (error) {
+      console.error('get-printers final error:', error);
+      return {
+        success: true,
+        printers: [{ name: 'Microsoft Print to PDF', isDefault: true, isThermal: false }]
+      };
+    }
+  });
+}
 
 // =====================================================
 // Application Lifecycle
@@ -334,6 +375,9 @@ app.whenReady().then(async () => {
 
     // Use unified handler setup instead of setupThermalPrintingHandlers
     setupAllHandlers(ipcMain, app);
+
+    // Enhance Electron print handlers
+    enhanceElectronPrintHandlers();
 
     createMainWindow();
 

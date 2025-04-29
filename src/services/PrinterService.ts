@@ -17,12 +17,24 @@ export class PrinterService {
   /**
    * Gets all available printers
    */
-  async getPrinters(){
-    if (window.printerApi && typeof window.printerApi.getPrinters === 'function') {
-      return await window.printerApi.getPrinters();
-    } else {
-      console.warn('No printer API available');
-      return [];
+  async getPrinters(): Promise<{ success: boolean; printers: any[]; error?: string }> {
+    try {
+      if (window.printerApi?.getPrinters) {
+        const result = await window.printerApi.getPrinters()
+        if (result && Array.isArray(result.printers)) {
+          return result
+        }
+        return { success: true, printers: [] }
+      }
+      console.warn('No printer API available, returning empty list')
+      return { success: true, printers: [] }
+    } catch (error) {
+      console.error('Error getting printers:', error)
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+        printers: []
+      }
     }
   }
 
@@ -32,7 +44,8 @@ export class PrinterService {
   async print(options: any): Promise<{ success: boolean; message?: string; error?: string }> {
     try {
       if (window.printerApi?.print) {
-        return await window.printerApi.print(options)
+        const result = await window.printerApi.print(options)
+        return result || { success: false, error: 'No response from print API' }
       }
       throw new Error('No printing API available')
     } catch (error) {
@@ -70,36 +83,23 @@ export class PrinterService {
       const html = `
         <!DOCTYPE html>
         <html>
-        <head>
-          <meta charset="UTF-8">
-          <title>Printer Test</title>
-          <style>
-            body { font-family: Arial; text-align: center; padding: 20px; }
-            .title { font-size: 18pt; font-weight: bold; margin-bottom: 10px; }
-            .content { font-size: 12pt; }
-            .footer { margin-top: 20px; font-size: 10pt; }
-          </style>
-        </head>
+        <head><meta charset="UTF-8"><title>Printer Test</title><style>
+          body{font-family:Arial;text-align:center;padding:20px}
+          .title{font-size:18pt;font-weight:bold;margin-bottom:10px}
+          .content{font-size:12pt}
+          .footer{margin-top:20px;font-size:10pt}
+        </style></head>
         <body>
           <div class="title">PRINTER TEST PAGE</div>
           <div class="content">
             <p>This is a test page to verify if your printer is working correctly.</p>
-            <p>If you can read this text, your printer is working properly.</p>
-            <p>Printer: ${printerName || 'Default'}</p>
+            <p>Printer: ${printerName||'Default'}</p>
             <p>Date: ${new Date().toLocaleString()}</p>
           </div>
-          <div class="footer">
-            WilPOS - Point of Sale System
-          </div>
+          <div class="footer">WilPOS - Point of Sale System</div>
         </body>
-        </html>
-      `
-      const result = await this.print({
-        html,
-        printerName,
-        silent: true,
-        options: { thermalPrinter: true }
-      })
+        </html>`
+      const result = await this.print({ html, printerName, silent: true, options: { thermalPrinter: true } })
       return result
     } catch (error) {
       console.error('Error testing printer:', error)

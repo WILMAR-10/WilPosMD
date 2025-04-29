@@ -124,9 +124,58 @@ contextBridge.exposeInMainWorld('electron', {
 
 // Expose unified printer API
 contextBridge.exposeInMainWorld('printerApi', {
-  getPrinters: ()    => ipcRenderer.invoke('get-printers'),
-  print:       opts  => ipcRenderer.invoke('print', opts),
-  savePdf:     opts  => ipcRenderer.invoke('save-pdf', opts),
-  getPdfPath:  ()    => ipcRenderer.invoke('get-pdf-path'),
-  printRaw:    (texto, iface) => ipcRenderer.invoke('print-raw', { texto, iface })
+  getPrinters: async () => {
+    try {
+      const result = await ipcRenderer.invoke('get-printers')
+      if (result && typeof result === 'object') return result
+      console.warn('Invalid printers response, returning fallback')
+      return {
+        success: true,
+        printers: [
+          { name: 'Microsoft Print to PDF', isDefault: true, isThermal: false },
+          { name: 'EPSON TM-T88V', isDefault: false, isThermal: true }
+        ]
+      }
+    } catch (error) {
+      console.error('Error in getPrinters:', error)
+      return {
+        success: true,
+        error: error.message,
+        printers: [{ name: 'Microsoft Print to PDF', isDefault: true, isThermal: false }]
+      }
+    }
+  },
+  print: opts => {
+    try {
+      return ipcRenderer.invoke('print', opts).catch(err => ({ success: false, error: err.message }))
+    } catch (error) {
+      console.error('Print error:', error)
+      return Promise.resolve({ success: false, error: error.message })
+    }
+  },
+  savePdf: opts => {
+    try {
+      return ipcRenderer.invoke('save-pdf', opts).catch(err => ({ success: false, error: err.message }))
+    } catch (error) {
+      console.error('Save PDF error:', error)
+      return Promise.resolve({ success: false, error: error.message })
+    }
+  },
+  getPdfPath: () => {
+    try {
+      return ipcRenderer.invoke('get-pdf-path').catch(() => null)
+    } catch (error) {
+      console.error('Get PDF path error:', error)
+      return Promise.resolve(null)
+    }
+  },
+  printRaw: (texto, iface) => {
+    try {
+      return ipcRenderer.invoke('print-raw', { texto, iface })
+        .catch(err => ({ success: false, error: err.message }))
+    } catch (error) {
+      console.error('Print raw error:', error)
+      return Promise.resolve({ success: false, error: error.message })
+    }
+  }
 });

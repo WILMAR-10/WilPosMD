@@ -45,7 +45,12 @@ export class ThermalPrintService {
 
   public async checkPrinterStatus(): Promise<{ available: boolean; printerName?: string; message?: string }> {
     try {
-      const { printers } = await this.printerService.getPrinters()
+      const result = await this.printerService.getPrinters()
+      if (!result || !Array.isArray(result.printers)) {
+        return { available: false, message: 'No se pudieron detectar impresoras' }
+      }
+      const printers = result.printers
+
       if (this.printerName) {
         const found = printers.find(p => p.name === this.printerName)
         if (found) {
@@ -60,6 +65,7 @@ export class ThermalPrintService {
           message: `Configured printer "${this.printerName}" not found`
         }
       }
+
       const thermal = printers.find(p => p.isThermal)
       if (thermal) {
         this.printerName = thermal.name
@@ -69,6 +75,7 @@ export class ThermalPrintService {
           message: `Detected thermal printer "${thermal.name}"`
         }
       }
+
       const def = printers.find(p => p.isDefault)
       if (def) {
         return {
@@ -77,6 +84,7 @@ export class ThermalPrintService {
           message: `Using default printer "${def.name}"`
         }
       }
+
       return { available: false, message: 'No printers detected' }
     } catch (e) {
       console.error('Error checking printer status:', e)
@@ -88,7 +96,15 @@ export class ThermalPrintService {
   }
 
   public async getAllPrinters(): Promise<{ printers: any[] }> {
-    return this.printerService.getPrinters()
+    try {
+      const result = await this.printerService.getPrinters()
+      return result && Array.isArray(result.printers)
+        ? result
+        : { printers: [] }
+    } catch (error) {
+      console.error('Error getting printers:', error)
+      return { printers: [] }
+    }
   }
 
   private generateThermalReceiptHTML(sale: any): string {
