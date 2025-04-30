@@ -459,20 +459,50 @@ export async function printWithThermalPrinter(options) {
           }
           
           // Interfaz: puerto serie si existe, sino nombre USB
-          const iface = options.serialInfo?.path || options.printerName;
+          const iface = options.serialInfo?.path
+            ? options.serialInfo.path
+            : `printer:${options.printerName}`;
+          
+          // Siempre proveer un driver: serialport para serie, printer para USB
           const driverConfig = options.serialInfo
-            ? { module:'serialport', options:{ path: options.serialInfo.path, baudRate: options.serialInfo.baudRate||9600 } }
-            : undefined;
+            ? {
+                module: 'serialport',
+                options: {
+                  path: options.serialInfo.path,
+                  baudRate: options.serialInfo.baudRate || 9600
+                }
+              }
+            : {
+                module: 'printer',
+                options: {
+                  // nombre de la impresora y formato RAW para printDirect()
+                  printer: options.printerName,
+                  type: 'RAW'
+                }
+              };
+          
           const printer = new ThermalPrinter({
             type: printerType,
             interface: iface,
-            options: { timeout: 5000, width: options.options?.width==='58mm'?32:48 },
+            options: { timeout: 5000, width: options.options?.width === '58mm' ? 32 : 48 },
             driver: driverConfig
           });
           
           // Convertir HTML a texto plano y enviar
           const plainText = simplifyHtmlToText(options.html);
-          printer.write(plainText);
+
+          if (typeof printer.raw === 'function') {
+            // send raw ESC/POS data
+            printer.raw(plainText);
+          }
+          else if (typeof printer.println === 'function') {
+            // fallback: print line by line
+            plainText.split('\n').forEach(line => printer.println(line));
+          }
+          else {
+            console.warn('⚠️ ThermalPrinter instance has no raw() or println(), skipping direct send');
+          }
+
           const success = await printer.execute();
           
           if (success) {

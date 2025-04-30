@@ -71,6 +71,7 @@ interface SavePdfResult {
 }
 
 interface Printer {
+  isThermal: boolean;
   name: string;
   description?: string;
   status?: number;

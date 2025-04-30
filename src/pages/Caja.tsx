@@ -443,134 +443,130 @@ const Caja: React.FC = () => {
           }));
 
           // Validar el método de pago
-          const validPaymentMethod = 
-            (paymentMethod === 'Efectivo' || paymentMethod === 'Tarjeta' || paymentMethod === 'Transferencia') 
-              ? paymentMethod 
+          const validPaymentMethod =
+            (paymentMethod === 'Efectivo' ||
+              paymentMethod === 'Tarjeta' ||
+              paymentMethod === 'Transferencia')
+              ? paymentMethod
               : 'Efectivo';
 
           // Objeto de venta con todos los datos necesarios
           const sale: Sale = {
             cliente_id: selectedCustomer,
-            total: total,
+            total,
             descuento: discount,
             impuestos: taxAmount,
             metodo_pago: validPaymentMethod,
             estado: 'Completada',
             notas: notes || undefined,
             usuario_id: user?.id,
-            monto_recibido: paymentMethod === 'Efectivo' ? amountReceived : total,
-            cambio: paymentMethod === 'Efectivo' ? calculateChange : 0,
-            detalles: saleDetails // Incluir los detalles en el objeto sale
+            monto_recibido:
+              paymentMethod === 'Efectivo' ? amountReceived : total,
+            cambio:
+              paymentMethod === 'Efectivo' ? calculateChange : 0,
+            detalles: saleDetails
           };
 
           console.log('Enviando datos de venta:', JSON.stringify(sale));
 
           // Procesar la venta en la base de datos
-          let result;
-
-          try {
-            if (window.api?.createSale) {
-              // Pasamos el objeto sale completo que ya incluye los detalles
-              result = await window.api.createSale(sale) as SaleResponse;
-              console.log('Venta procesada con window.api.createSale:', result);
-            } else {
-              throw new Error('API de ventas no disponible');
-            }
-          } catch (error) {
-            console.error('Error en API de ventas:', error);
-            throw new Error(`Error al procesar venta: ${error instanceof Error ? error.message : 'Error desconocido'}`);
+          let result: SaleResponse;
+          if (window.api?.createSale) {
+            result = (await window.api.createSale(sale)) as SaleResponse;
+            console.log('Venta procesada con window.api.createSale:', result);
+          } else {
+            throw new Error('API de ventas no disponible');
           }
 
-          if (!result) {
-            throw new Error('No se recibió respuesta al crear la venta');
-          }
-
-          // Log the full result for debugging
-          console.log('Resultado completo de crear venta:', result);
-
-          // Check for success and ID - con aserción de tipo
           if (!result.success) {
-            throw new Error(result.error || 'Error desconocido al crear la venta');
+            throw new Error(result.error || 'Error al crear la venta');
           }
-
           if (!result.id) {
             throw new Error('No se recibió ID de la venta');
           }
 
-          // Sale was successful - update UI with cleaner alert message
+          // Guardar estado previo por si falla la impresión
+          const previousCart = [...cart];
+          const previousDiscount = discount;
+          const previousNotes = notes;
+
+          // Limpiar inmediatamente carrito y datos
+          setCart([]);
+          setDiscount(0);
+          setNotes('');
+          setAmountReceived(0);
+
+          // Mensaje de éxito
           let successMessage = 'Venta procesada con éxito';
-          if (result.warnings && Array.isArray(result.warnings) && result.warnings.length > 0) {
-            successMessage = 'Venta procesada con advertencias: ' + result.warnings[0];
+          if (result.warnings?.length) {
+            successMessage =
+              'Venta procesada con advertencias: ' +
+              result.warnings[0];
           }
+          setAlert({ type: 'success', message: successMessage });
 
-          setAlert({ 
-            type: 'success', 
-            message: successMessage
-          });
-
-          // Build preview sale object with complete information
-          const previewSale: PreviewSale = {
+          // Construir previewSale usando previousCart
+          const preview: PreviewSale = {
             id: result.id,
             cliente_id: selectedCustomer,
             cliente: selectedCustomerName,
-            total: total,
-            descuento: discount,
+            total,
+            descuento: previousDiscount,
             impuestos: taxAmount,
             metodo_pago: validPaymentMethod,
             estado: 'Completada',
-            notas: notes || undefined,
+            notas: previousNotes,
             fecha_venta: new Date().toISOString(),
             usuario_id: user?.id,
             usuario: user?.nombre || 'Usuario',
-            monto_recibido: paymentMethod === 'Efectivo' ? amountReceived : total,
-            cambio: paymentMethod === 'Efectivo' ? calculateChange : 0,
-            detalles: cart.map(item => ({...item}))
+            monto_recibido:
+              paymentMethod === 'Efectivo' ? amountReceived : total,
+            cambio:
+              paymentMethod === 'Efectivo' ? calculateChange : 0,
+            detalles: previousCart.map(item => ({ ...item }))
           };
-
-          setPreviewSale(previewSale);
+          setPreviewSale(preview);
           setPreviewMode(true);
 
-          // Broadcast that a sale was created
+          // Sincronizar
           broadcastSyncEvent('sale:create', {
             saleId: result.id,
-            products: cart.map(item => ({
+            products: previousCart.map(item => ({
               id: item.product_id,
               quantity: item.quantity
             }))
           });
 
-          // Print receipt if enabled
-          if (printAfterSale && previewSale) {
+          // Imprimir si está habilitado
+          if (printAfterSale) {
             try {
               const thermalService = ThermalPrintService.getInstance();
-              const printResult = await thermalService.printReceipt(previewSale);
+              const printResult = await thermalService.printReceipt(preview);
               if (!printResult.success) {
                 console.warn('Advertencia al imprimir:', printResult.message);
+                setAlert({
+                  type: 'warning',
+                  message: `Venta completada, pero hubo problemas al imprimir: ${printResult.message}`
+                });
               }
             } catch (printError) {
               console.error('Error al imprimir:', printError);
+              setAlert({
+                type: 'warning',
+                message: 'Venta completada, pero hubo un error al imprimir el recibo'
+              });
             }
           }
 
-          // Refresh products data after sale to get updated stock levels
-          try {
-            setTimeout(() => {
-              fetchProducts();
-            }, 1500);
-          } catch (refreshError) {
-            console.warn('Error al actualizar productos:', refreshError);
-          }
-
-          // Clear cart after successful sale
-          setCart([]);
-          setDiscount(0);
-          setNotes('');
-          setAmountReceived(0);
+          // Actualizar stock
+          setTimeout(() => fetchProducts(), 1000);
         } catch (error) {
           console.error('Error al procesar venta:', error);
-          setAlert({ 
-            type: 'error', 
-            message: `Error al procesar la venta: ${error instanceof Error ? error.message : 'Error desconocido'}`
+          setAlert({
+            type: 'error',
+            message: `Error al procesar la venta: ${
+              error instanceof Error ? error.message : 'Desconocido'
+            }`
           });
         } finally {
           setIsSubmitting(false);
@@ -583,27 +579,37 @@ const Caja: React.FC = () => {
   // Regresar al home
   const handleGoBack = () => {
     if (previewMode) {
+      // Si estamos en modo vista previa de una venta completada, limpiar todo
+      if (previewSale?.estado === 'Completada') {
+        setCart([]);
+        setDiscount(0);
+        setNotes('');
+        setAmountReceived(0);
+        setPreviewMode(false);
+        setPreviewSale(null);
+        return;
+      }
+      // Si es sólo una vista previa sin venta completada, volver al carrito
       setPreviewMode(false);
       return;
     }
 
+    // Si hay productos en el carrito, confirmar antes de salir
     if (cart.length > 0) {
       showConfirmDialog(
         'Salir del módulo de caja',
         '¿Estás seguro? Perderás la venta actual',
         () => {
-          const event = new CustomEvent('componentChange', {
+          window.dispatchEvent(new CustomEvent('componentChange', {
             detail: { component: 'Home' }
-          });
-          window.dispatchEvent(event);
+          }));
         },
         'warning'
       );
     } else {
-      const event = new CustomEvent('componentChange', {
+      window.dispatchEvent(new CustomEvent('componentChange', {
         detail: { component: 'Home' }
-      });
-      window.dispatchEvent(event);
+      }));
     }
   };
 
@@ -632,45 +638,72 @@ const Caja: React.FC = () => {
     }
   };
 
-  // Manejo de impresión manual simplificado
+  // Manejo de impresión manual mejorado
   async function handlePrint() {
+    // Si no hay factura seleccionada, pero hay productos en el carrito, crear una vista previa temporal
     if (!previewSale) {
-      if (cart.length > 0) {
-        const customer = customers.find(c => c.id === selectedCustomer);
-        const customerName = customer ? customer.nombre : 'Cliente General';
-        const tempPreview: PreviewSale = {
-          cliente_id: selectedCustomer,
-          cliente: customerName,
-          total, descuento: discount, impuestos: taxAmount,
-          metodo_pago: paymentMethod, estado: 'Pendiente',
-          fecha_venta: new Date().toISOString(),
-          usuario_id: user?.id, usuario: user?.nombre || 'Usuario',
-          monto_recibido: amountReceived, cambio: calculateChange,
-          detalles: cart.map(item => ({ ...item }))
-        };
-        setIsSubmitting(true);
-        try {
-          const thermalService = ThermalPrintService.getInstance();
-          const result = await thermalService.printReceipt(tempPreview);
-          if (result.success) {
-            setAlert({ type: 'success', message: 'Borrador de recibo enviado a la impresora' });
-          } else {
-            throw new Error(result.message || 'Error al imprimir');
-          }
-        } catch (err) {
-          setAlert({
-            type: 'error',
-            message: `Error de impresión: ${err instanceof Error ? err.message : String(err)}`
-          });
-          console.error('Print error:', err);
-        } finally {
-          setIsSubmitting(false);
-        }
-      } else {
+      if (cart.length === 0) {
         setAlert({
           type: 'error',
           message: 'No hay recibo para imprimir. Agregue productos al carrito primero.'
         });
+        return;
+      }
+      
+      // Crear objeto de vista previa temporal para impresión
+      const customer = customers.find(c => c.id === selectedCustomer);
+      const customerName = customer ? customer.nombre : 'Cliente General';
+      const tempPreview: PreviewSale = {
+        cliente_id: selectedCustomer,
+        cliente: customerName,
+        total,
+        descuento: discount,
+        impuestos: taxAmount,
+        metodo_pago: paymentMethod,
+        estado: 'Pendiente',
+        fecha_venta: new Date().toISOString(),
+        usuario_id: user?.id,
+        usuario: user?.nombre || 'Usuario',
+        monto_recibido: amountReceived,
+        cambio: calculateChange,
+        detalles: cart.map(item => ({ ...item }))
+      };
+      
+      setIsSubmitting(true);
+      try {
+        console.log('Imprimiendo recibo temporal...');
+        const thermalService = ThermalPrintService.getInstance();
+        // Verificar estado de la impresora
+        const status = await thermalService.checkPrinterStatus();
+        if (!status.available) {
+          throw new Error(`No hay impresora disponible: ${status.message}`);
+        }
+        console.log(`Imprimiendo en: ${status.printerName}`);
+        const result = await thermalService.printReceipt(tempPreview);
+        if (result.success) {
+          setAlert({ type: 'success', message: 'Borrador de recibo enviado a la impresora' });
+        } else {
+          throw new Error(result.message || 'Error al imprimir');
+        }
+      } catch (err) {
+        console.error('Error de impresión:', err);
+        setAlert({
+          type: 'error',
+          message: `Error de impresión: ${err instanceof Error ? err.message : String(err)}`
+        });
+        // Intentar impresión simplificada por raw ESC/POS
+        try {
+          console.log('Intentando impresión alternativa...');
+          if (window.printerApi?.printRaw) {
+            const simple = `\x1B@\x1Ba\x01WILPOS\n\nBORRADOR DE FACTURA\n\nTotal: ${total.toFixed(2)}\nFecha: ${new Date().toLocaleString()}\n\n\x1D\x56\x42\x00`;
+            await window.printerApi.printRaw(simple, printerStatus?.printerName);
+            setAlert({ type: 'warning', message: 'Se envió un recibo simplificado a la impresora' });
+          }
+        } catch (altErr) {
+          console.error('Error en impresión alternativa:', altErr);
+        }
+      } finally {
+        setIsSubmitting(false);
       }
       return;
     }
@@ -678,7 +711,13 @@ const Caja: React.FC = () => {
     // Imprimir si hay una venta previsualizada
     setIsSubmitting(true);
     try {
+      console.log('Imprimiendo venta guardada:', previewSale.id);
       const thermalService = ThermalPrintService.getInstance();
+      const status = await thermalService.checkPrinterStatus();
+      if (!status.available) {
+        throw new Error(`No hay impresora disponible: ${status.message}`);
+      }
+      console.log(`Imprimiendo en: ${status.printerName}`);
       const result = await thermalService.printReceipt(previewSale);
       if (result.success) {
         setAlert({ type: 'success', message: 'Recibo enviado a la impresora térmica' });
@@ -686,11 +725,21 @@ const Caja: React.FC = () => {
         throw new Error(result.message || 'Error al imprimir');
       }
     } catch (err) {
+      console.error('Error de impresión:', err);
       setAlert({
         type: 'error',
         message: `Error de impresión: ${err instanceof Error ? err.message : String(err)}`
       });
-      console.error('Print error:', err);
+      // Intentar raw simplificado
+      try {
+        if (window.printerApi?.printRaw) {
+          const simple = `\x1B@\x1Ba\x01WILPOS\n\nFACTURA #${previewSale.id || 'N/A'}\n\nTotal: ${previewSale.total.toFixed(2)}\nFecha: ${new Date(previewSale.fecha_venta).toLocaleString()}\n\n\x1D\x56\x42\x00`;
+          await window.printerApi.printRaw(simple, printerStatus?.printerName);
+          setAlert({ type: 'warning', message: 'Se envió un recibo simplificado a la impresora' });
+        }
+      } catch (altErr) {
+        console.error('Error en impresión alternativa:', altErr);
+      }
     } finally {
       setIsSubmitting(false);
     }

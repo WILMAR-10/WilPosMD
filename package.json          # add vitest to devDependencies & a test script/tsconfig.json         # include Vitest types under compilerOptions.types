@@ -1,0 +1,24 @@
+{
+  "name": "your-project-name",
+  "version": "1.0.0",
+  "devDependencies": {
+    "vitest": "^latest"
+  },
+  "scripts": {
+    "test": "vitest"
+  }
+}
+
+{
+  "compilerOptions": {
+    "types": ["vitest"]
+  }
+}
+
+import { describe, it, expect } from 'vitest';
+
+describe('hello world test', () => {
+  it('should return hello world', () => {
+    expect('hello world').toBe('hello world');
+  });
+});

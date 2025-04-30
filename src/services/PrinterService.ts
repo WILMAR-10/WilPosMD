@@ -24,6 +24,7 @@ export class PrinterService {
   async getPrinters(): Promise<{ success: boolean; printers: any[]; error?: string }> {
     try {
       const now = Date.now();
+      // Solo usar caché si ha pasado menos de 30 segundos desde la última detección
       if (
         this.lastDetectedPrinters.length > 0 &&
         now - this.printerDetectionTimestamp < 30000
@@ -36,10 +37,12 @@ export class PrinterService {
       }
 
       console.log("Iniciando detección de impresoras...");
+
+      // 1) Intentar con window.printerApi.getPrinters
       if (window.printerApi?.getPrinters) {
         const result = await window.printerApi.getPrinters();
         console.log("Resultado de detección:", JSON.stringify(result, null, 2));
-        if (result && Array.isArray(result.printers)) {
+        if (result?.printers && Array.isArray(result.printers)) {
           const enhanced = result.printers.map(p => ({
             ...p,
             isThermal: p.isThermal || this.isThermalPrinter(p.name)
@@ -48,17 +51,42 @@ export class PrinterService {
           this.printerDetectionTimestamp = now;
           return { success: true, printers: enhanced };
         }
-        console.warn("API de impresoras devolvió resultado inválido");
-        return { success: true, printers: [] };
       }
 
+      // 2) Fallback a window.api.getPrinters si existe
+      if (window.api?.getPrinters) {
+        try {
+          const printers = await window.api.getPrinters();
+          if (Array.isArray(printers)) {
+            const enhanced = printers.map(p => ({
+              ...p,
+              isThermal: p.isThermal || this.isThermalPrinter(p.name)
+            }));
+            this.lastDetectedPrinters = enhanced;
+            this.printerDetectionTimestamp = now;
+            return { success: true, printers: enhanced };
+          }
+        } catch (apiError) {
+          console.warn("Error con window.api.getPrinters:", apiError);
+        }
+      }
+
+      // 3) Fallback estático
       console.warn("No hay API de impresoras disponible, usando fallback");
       const common = [
-        { name: "Microsoft Print to PDF", isDefault: true, isThermal: false },
-        { name: "EPSON TM-T88V",       isDefault: false, isThermal: true  },
-        { name: "POS-80",               isDefault: false, isThermal: true  },
-        { name: "Generic / Text Only",  isDefault: false, isThermal: false },
+        { name: "Microsoft Print to PDF", isDefault: false, isThermal: false },
+        { name: "POS-58",                isDefault: false, isThermal: true  },
+        { name: "POS-80",                isDefault: false, isThermal: true  },
+        { name: "POS58",                 isDefault: false, isThermal: true  },
+        { name: "POS80",                 isDefault: false, isThermal: true  },
+        { name: "XP-58",                 isDefault: false, isThermal: true  },
+        { name: "XP-80",                 isDefault: false, isThermal: true  },
+        { name: "Generic / Text Only",   isDefault: false, isThermal: false },
+        { name: "EPSON TM-T20",          isDefault: false, isThermal: true  },
+        { name: "EPSON TM-T88V",         isDefault: false, isThermal: true  },
       ];
+      this.lastDetectedPrinters = common;
+      this.printerDetectionTimestamp = now;
       return { success: true, printers: common };
     } catch (error) {
       console.error("Error obteniendo impresoras:", error);

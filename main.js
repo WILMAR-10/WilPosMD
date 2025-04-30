@@ -322,68 +322,59 @@ function setupAllHandlers(ipcMain, app) {
   safeRegister('print-raw', async (_, { texto, printerName }) => {
     console.log(`Impresión RAW solicitada para: ${printerName || 'Impresora predeterminada'}`);
     try {
-      // Intentar con node-thermal-printer si está disponible
-      let success = false, message = '';
-      try {
-        const thermPrinter = await import('node-thermal-printer').catch(() => {
-          const require = createRequire(import.meta.url);
-          return require('node-thermal-printer');
-        });
-        const ThermalPrinter = thermPrinter.printer || thermPrinter.default?.printer;
-        const PrinterTypes   = thermPrinter.types   || thermPrinter.default?.types;
-        if (ThermalPrinter && PrinterTypes) {
-          const printer = new ThermalPrinter({
-            type: PrinterTypes.EPSON,
-            interface: printerName || 'Printer',
-            options: { timeout: 5000 },
-            width: 48,
-            characterSet: 'PC850_MULTILINGUAL'
-          });
-          try {
-            const isConnected = await printer.isPrinterConnected();
-            console.log(`Impresora conectada: ${isConnected}`);
-            if (!isConnected) throw new Error('Impresora no conectada');
-          } catch { /* continúa de todas formas */ }
-          printer.write(texto);
-          success = await printer.execute();
-          message = success ? 'Impresión exitosa' : 'Fallo en impresión';
-          console.log(`Resultado de impresión RAW: ${success}`);
-          return { success, message };
-        }
-        throw new Error('Módulo de impresión térmica no disponible');
-      } catch (thermalError) {
-        console.warn('Error con node-thermal-printer, intentando método alternativo:', thermalError);
-        const htmlContent = `
-          <!DOCTYPE html>
-          <html>
-          <head>
-            <meta charset="UTF-8">
-            <title>Impresión RAW</title>
-            <style>
-              @page { margin: 0; size: 80mm auto; }
-              body {
-                font-family: monospace;
-                white-space: pre;
-                font-size: 9pt;
-                width: 72mm;
-                margin: 0;
-                padding: 3mm;
-              }
-            </style>
-          </head>
-          <body>${texto.replace(/[\x00-\x1F]/g, '')}</body>
-          </html>
-        `;
-        return await printWithThermalPrinter({
-          html: htmlContent,
-          printerName,
-          silent: true,
-          options: { thermalPrinter: true }
-        });
+      if (!printerName) {
+        throw new Error('Se requiere un nombre de impresora');
       }
+      // Crear ventana oculta para impresión
+      const win = new BrowserWindow({
+        show: false,
+        webPreferences: { contextIsolation: true, sandbox: false }
+      });
+
+      // Construir HTML con texto plano
+      const htmlContent = `
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <meta charset="UTF-8">
+          <title>Print Raw</title>
+          <style>
+            @page { margin: 0; size: 80mm auto; }
+            body {
+              font-family: monospace;
+              white-space: pre;
+              font-size: 9pt;
+              width: 72mm;
+              margin: 0;
+              padding: 0;
+            }
+          </style>
+        </head>
+        <body>${texto.replace(/[\x00-\x1F]/g, '')}</body>
+        </html>
+      `;
+      await win.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(htmlContent));
+
+      // Enviar a impresora
+      const result = await win.webContents.print({
+        silent: true,
+        printBackground: true,
+        deviceName: printerName,
+        margins: { marginType: 'none' },
+        pageSize: { width: 80000, height: 210000 }
+      });
+
+      win.close();
+      return {
+        success: result,
+        message: result ? 'Impresión enviada correctamente' : 'Error al enviar a impresora'
+      };
     } catch (error) {
       console.error('Error en impresión RAW:', error);
-      return { success: false, error: `Fallo de impresión: ${error.message || 'Error desconocido'}` };
+      return {
+        success: false,
+        error: `Fallo de impresión: ${error.message || 'Error desconocido'}`
+      };
     }
   });
 
