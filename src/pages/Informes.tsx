@@ -1,249 +1,231 @@
 ﻿// Updated Informes.tsx - Dashboard component for WilPOS
-import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
-import { useSettings } from '../services/DatabaseService';
+import type React from "react"
+import { useState, useEffect, useRef, useCallback } from "react"
+import { useSettings } from "../services/DatabaseService"
+import ExportReportUtils from "../utils/ExportReportUtils"
 import {
-  BarChart3, Download, TrendingUp, TrendingDown,
-  ChevronLeft, ArrowUp, ArrowDown, ClipboardList,
-  PieChart, Store, DollarSign, ShoppingCart,
-  Users, Calendar, Filter, Printer,
-  RefreshCw, Package, Percent, Check, X, AlertTriangle
-} from "lucide-react";
-import { PreviewSale } from '../types/sales';
-
-// Define types for reports data
-interface SalesReportItem {
-  fecha: string;
-  num_ventas: number;
-  total_ventas: number;
-  promedio_venta: number;
-  total_descuentos: number;
-  total_impuestos: number;
-}
-
-interface TopProductItem {
-  id: number;
-  nombre: string;
-  codigo_barra: string | null;
-  cantidad_vendida: number;
-  total_vendido: number;
-}
-
-interface SalesData {
-  today: {
-    total: number;
-    count: number;
-    average: number;
-  };
-  period: {
-    total: number;
-    count: number;
-    average: number;
-    growth: number;
-  };
-  byMonth: {
-    month: string;
-    total: number;
-    count: number;
-  }[];
-  topProducts: TopProductItem[];
-  categories: {
-    category: string;
-    total: number;
-    percentage: number;
-  }[];
-}
-
-interface AlertType {
-  type: 'success' | 'warning' | 'error' | 'info';
-  message: string;
-}
+  BarChart3,
+  Download,
+  TrendingUp,
+  TrendingDown,
+  ChevronLeft,
+  ClipboardList,
+  PieChart,
+  Store,
+  DollarSign,
+  ShoppingCart,
+  Users,
+  Calendar,
+  Printer,
+  RefreshCw,
+  Package,
+  Check,
+  X,
+  AlertTriangle,
+  Mail,
+  FileText,
+  Folder,
+} from "lucide-react"
+import type { SalesReportItem, TopProductItem, SalesData, AlertType } from "./../types/reports"
 
 const Informes: React.FC = () => {
   // Settings for currency formatting
-  const { settings } = useSettings();
-  
+  const { settings } = useSettings()
+
   // State for filters and tabs
-  const [timeRange, setTimeRange] = useState<string>("month");
-  const [activeTab, setActiveTab] = useState<string>("sales");
-  const [startDate, setStartDate] = useState<Date>(new Date(new Date().setDate(new Date().getDate() - 30)));
-  const [endDate, setEndDate] = useState<Date>(new Date());
-  const [salesData, setSalesData] = useState<SalesData | null>(null);
-  const [isLoading, setIsLoading] = useState<boolean>(true);
-  const [alert, setAlert] = useState<AlertType | null>(null);
-  const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
-  const [lastUpdate, setLastUpdate] = useState<Date>(new Date());
-  const refreshTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const [timeRange, setTimeRange] = useState<string>("month")
+  const [activeTab, setActiveTab] = useState<string>("sales")
+  const [startDate, setStartDate] = useState<Date>(new Date(new Date().setDate(new Date().getDate() - 30)))
+  const [endDate, setEndDate] = useState<Date>(new Date())
+  const [salesData, setSalesData] = useState<SalesData | null>(null)
+  const [isLoading, setIsLoading] = useState<boolean>(true)
+  const [alert, setAlert] = useState<AlertType | null>(null)
+  const [isRefreshing, setIsRefreshing] = useState<boolean>(false)
+  const [lastUpdate, setLastUpdate] = useState<Date>(new Date())
+  const [exportFormat, setExportFormat] = useState<string>("pdf")
+  const [showExportOptions, setShowExportOptions] = useState<boolean>(false)
+  const refreshTimerRef = useRef<NodeJS.Timeout | null>(null)
+  const reportContentRef = useRef<HTMLDivElement>(null)
 
   // Format currency based on settings
   const formatCurrency = (amount: number) => {
     try {
       // Extract proper currency code
-      let currencyCode = 'DOP'; // Default to Dominican Peso
-      
+      let currencyCode = "DOP" // Default to Dominican Peso
+
       if (settings?.moneda) {
         // Handle common currency symbols
         const currencyMap: Record<string, string> = {
-          'RD$': 'DOP', // Dominican Peso
-          '$': 'USD',   // US Dollar
-          '€': 'EUR',   // Euro
-          '£': 'GBP'    // British Pound
-        };
-        
+          RD$: "DOP", // Dominican Peso
+          $: "USD", // US Dollar
+          "€": "EUR", // Euro
+          "£": "GBP", // British Pound
+        }
+
         if (currencyMap[settings.moneda]) {
-          currencyCode = currencyMap[settings.moneda];
+          currencyCode = currencyMap[settings.moneda]
         } else if (settings.moneda.length === 3) {
           // If it's already a 3-letter code, use it directly
-          currencyCode = settings.moneda;
+          currencyCode = settings.moneda
         }
       }
-      
-      return new Intl.NumberFormat('es-DO', {
-        style: 'currency',
+
+      return new Intl.NumberFormat("es-DO", {
+        style: "currency",
         currency: currencyCode,
-        minimumFractionDigits: 2
-      }).format(amount);
+        minimumFractionDigits: 2,
+      }).format(amount)
     } catch (error) {
       // Fallback if Intl.NumberFormat fails
-      return `${settings?.moneda || 'RD$'} ${amount.toFixed(2)}`;
+      return `${settings?.moneda || "RD$"} ${amount.toFixed(2)}`
     }
-  };
+  }
 
   // Enhanced loadSalesData with better error handling
-  const loadSalesData = useCallback(async (showRefreshing = true) => {
-    if (showRefreshing) setIsRefreshing(true);
-    setIsLoading(true);
-    
-    try {
-      if (!window.api?.getSalesReport) {
-        throw new Error('API no disponible');
-      }
+  const loadSalesData = useCallback(
+    async (showRefreshing = true) => {
+      if (showRefreshing) setIsRefreshing(true)
+      setIsLoading(true)
 
-      // Format dates for API
-      const startDateStr = startDate.toISOString().split('T')[0];
-      const endDateStr = endDate.toISOString().split('T')[0];
-
-      // Get sales report data
-      const salesReport = await window.api.getSalesReport(startDateStr, endDateStr) as SalesReportItem[];
-      
-      // Get top products
-      const topProducts = await window.api.getTopProducts(startDateStr, endDateStr, 10) as TopProductItem[];
-
-      // Process data for visualization
-      if (salesReport && salesReport.length > 0) {
-        // Calculate today's sales
-        const today = new Date().toISOString().split('T')[0];
-        const todaySales = salesReport.find(item => item.fecha === today) || { 
-          num_ventas: 0, 
-          total_ventas: 0,
-          promedio_venta: 0,
-          total_descuentos: 0,
-          total_impuestos: 0
-        };
-
-        // Calculate total for the period
-        const totalSales = salesReport.reduce((sum, item) => sum + item.total_ventas, 0);
-        const totalTransactions = salesReport.reduce((sum, item) => sum + item.num_ventas, 0);
-        const avgTicket = totalTransactions > 0 ? totalSales / totalTransactions : 0;
-
-        // Calculate sales by month
-        const monthlyData = salesReport.reduce((acc, item) => {
-          const date = new Date(item.fecha);
-          const monthYear = date.toLocaleDateString('es-ES', { month: 'short', year: 'numeric' });
-          
-          const existingMonth = acc.find(m => m.month === monthYear);
-          if (existingMonth) {
-            existingMonth.total += item.total_ventas;
-            existingMonth.count += item.num_ventas;
-          } else {
-            acc.push({
-              month: monthYear,
-              total: item.total_ventas,
-              count: item.num_ventas
-            });
-          }
-          return acc;
-        }, [] as { month: string, total: number, count: number }[]);
-
-        // Sort chronologically
-        monthlyData.sort((a, b) => {
-          return new Date(a.month).getTime() - new Date(b.month).getTime();
-        });
-
-        // Calculate growth compared to previous period
-        let growth = 0;
-        if (monthlyData.length >= 2) {
-          const lastMonth = monthlyData[monthlyData.length - 1].total;
-          const previousMonth = monthlyData[monthlyData.length - 2].total;
-          growth = previousMonth > 0 ? ((lastMonth - previousMonth) / previousMonth) * 100 : 0;
+      try {
+        if (!window.api?.getSalesReport) {
+          throw new Error("API no disponible")
         }
 
-        // Extract categories from top products
-        const categoriesData = topProducts.reduce((acc, product) => {
-          const category = product.nombre.split(' ')[0] || 'Otros'; // Simplification - in reality, use product.category
-          
-          const existingCategory = acc.find(c => c.category === category);
-          if (existingCategory) {
-            existingCategory.total += product.total_vendido;
-          } else {
-            acc.push({
-              category,
-              total: product.total_vendido,
-              percentage: 0 // Calculate later
-            });
+        // Format dates for API
+        const startDateStr = startDate.toISOString().split("T")[0]
+        const endDateStr = endDate.toISOString().split("T")[0]
+
+        // Get sales report data
+        const salesReport = (await window.api.getSalesReport(startDateStr, endDateStr)) as SalesReportItem[]
+
+        // Get top products
+        const topProducts = (await window.api.getTopProducts(startDateStr, endDateStr, 10)) as TopProductItem[]
+
+        // Process data for visualization
+        if (salesReport && salesReport.length > 0) {
+          // Calculate today's sales
+          const today = new Date().toISOString().split("T")[0]
+          const todaySales = salesReport.find((item) => item.fecha === today) || {
+            num_ventas: 0,
+            total_ventas: 0,
+            promedio_venta: 0,
+            total_descuentos: 0,
+            total_impuestos: 0,
           }
-          return acc;
-        }, [] as { category: string, total: number, percentage: number }[]);
 
-        // Calculate percentages
-        const totalCategorySales = categoriesData.reduce((sum, cat) => sum + cat.total, 0);
-        categoriesData.forEach(cat => {
-          cat.percentage = Math.round((cat.total / totalCategorySales) * 100);
-        });
+          // Calculate total for the period
+          const totalSales = salesReport.reduce((sum, item) => sum + item.total_ventas, 0)
+          const totalTransactions = salesReport.reduce((sum, item) => sum + item.num_ventas, 0)
+          const avgTicket = totalTransactions > 0 ? totalSales / totalTransactions : 0
 
-        // Sort categories by total
-        categoriesData.sort((a, b) => b.total - a.total);
+          // Calculate sales by month
+          const monthlyData = salesReport.reduce(
+            (acc, item) => {
+              const date = new Date(item.fecha)
+              const monthYear = date.toLocaleDateString("es-ES", { month: "short", year: "numeric" })
 
-        // Set processed data
-        setSalesData({
-          today: {
-            total: todaySales.total_ventas,
-            count: todaySales.num_ventas,
-            average: todaySales.promedio_venta || 0
-          },
-          period: {
-            total: totalSales,
-            count: totalTransactions,
-            average: avgTicket,
-            growth
-          },
-          byMonth: monthlyData,
-          topProducts,
-          categories: categoriesData
-        });
+              const existingMonth = acc.find((m) => m.month === monthYear)
+              if (existingMonth) {
+                existingMonth.total += item.total_ventas
+                existingMonth.count += item.num_ventas
+              } else {
+                acc.push({
+                  month: monthYear,
+                  total: item.total_ventas,
+                  count: item.num_ventas,
+                })
+              }
+              return acc
+            },
+            [] as { month: string; total: number; count: number }[],
+          )
 
-        // Update last refresh timestamp
-        setLastUpdate(new Date());
-      } else {
-        // No data available
-        setSalesData({
-          today: { total: 0, count: 0, average: 0 },
-          period: { total: 0, count: 0, average: 0, growth: 0 },
-          byMonth: [],
-          topProducts: [],
-          categories: []
-        });
+          // Sort chronologically
+          monthlyData.sort((a, b) => {
+            return new Date(a.month).getTime() - new Date(b.month).getTime()
+          })
+
+          // Calculate growth compared to previous period
+          let growth = 0
+          if (monthlyData.length >= 2) {
+            const lastMonth = monthlyData[monthlyData.length - 1].total
+            const previousMonth = monthlyData[monthlyData.length - 2].total
+            growth = previousMonth > 0 ? ((lastMonth - previousMonth) / previousMonth) * 100 : 0
+          }
+
+          // Extract categories from top products
+          const categoriesData = topProducts.reduce(
+            (acc, product) => {
+              const category = product.nombre.split(" ")[0] || "Otros" // Simplification - in reality, use product.category
+
+              const existingCategory = acc.find((c) => c.category === category)
+              if (existingCategory) {
+                existingCategory.total += product.total_vendido
+              } else {
+                acc.push({
+                  category,
+                  total: product.total_vendido,
+                  percentage: 0, // Calculate later
+                })
+              }
+              return acc
+            },
+            [] as { category: string; total: number; percentage: number }[],
+          )
+
+          // Calculate percentages
+          const totalCategorySales = categoriesData.reduce((sum, cat) => sum + cat.total, 0)
+          categoriesData.forEach((cat) => {
+            cat.percentage = Math.round((cat.total / totalCategorySales) * 100)
+          })
+
+          // Sort categories by total
+          categoriesData.sort((a, b) => b.total - a.total)
+
+          // Set processed data
+          setSalesData({
+            today: {
+              total: todaySales.total_ventas,
+              count: todaySales.num_ventas,
+              average: todaySales.promedio_venta || 0,
+            },
+            period: {
+              total: totalSales,
+              count: totalTransactions,
+              average: avgTicket,
+              growth,
+            },
+            byMonth: monthlyData,
+            topProducts,
+            categories: categoriesData,
+          })
+
+          // Update last refresh timestamp
+          setLastUpdate(new Date())
+        } else {
+          // No data available
+          setSalesData({
+            today: { total: 0, count: 0, average: 0 },
+            period: { total: 0, count: 0, average: 0, growth: 0 },
+            byMonth: [],
+            topProducts: [],
+            categories: [],
+          })
+        }
+      } catch (error) {
+        console.error("Error loading sales data:", error)
+        setAlert({
+          type: "error",
+          message: `Error al cargar datos: ${error instanceof Error ? error.message : "Error desconocido"}`,
+        })
+      } finally {
+        setIsLoading(false)
+        setIsRefreshing(false)
       }
-    } catch (error) {
-      console.error('Error loading sales data:', error);
-      setAlert({
-        type: 'error',
-        message: `Error al cargar datos: ${error instanceof Error ? error.message : 'Error desconocido'}`
-      });
-    } finally {
-      setIsLoading(false);
-      setIsRefreshing(false);
-    }
-  }, [startDate, endDate, setAlert]);
+    },
+    [startDate, endDate, setAlert],
+  )
 
   // Enhanced useSyncListener that captures more relevant events
   function useSyncListener(callback: () => void) {
@@ -251,219 +233,136 @@ const Informes: React.FC = () => {
       // All events that should trigger a reports refresh
       const relevantEvents = [
         // Sales events
-        'sale:create', 'sale:update', 'sale:delete', 
+        "sale:create",
+        "sale:update",
+        "sale:delete",
         // Product events that might affect reports
-        'product:create', 'product:update', 'product:delete',
+        "product:create",
+        "product:update",
+        "product:delete",
         // Category events
-        'category:update',
+        "category:update",
         // Data sync events
-        'sync:complete', 'database:updated'
-      ];
-      
-      const handleSyncEvent = (event: CustomEvent) => {
-        const syncEvent = event.detail;
-        if (relevantEvents.includes(syncEvent.type)) {
-          console.log(`Refreshing reports due to ${syncEvent.type} event`);
-          callback();
-        }
-      };
+        "sync:complete",
+        "database:updated",
+      ]
 
-      window.addEventListener('sync-event', handleSyncEvent as EventListener);
+      const handleSyncEvent = (event: CustomEvent) => {
+        const syncEvent = event.detail
+        if (relevantEvents.includes(syncEvent.type)) {
+          console.log(`Refreshing reports due to ${syncEvent.type} event`)
+          callback()
+        }
+      }
+
+      window.addEventListener("sync-event", handleSyncEvent as EventListener)
       return () => {
-        window.removeEventListener('sync-event', handleSyncEvent as EventListener);
-      };
-    }, [callback]);
+        window.removeEventListener("sync-event", handleSyncEvent as EventListener)
+      }
+    }, [callback])
   }
 
   // Set up automatic refresh on interval
   useEffect(() => {
     // Refresh every 5 minutes (300000ms)
-    const REFRESH_INTERVAL = 300000;
-    
+    const REFRESH_INTERVAL = 300000
+
     // Clean up any existing timer
     if (refreshTimerRef.current) {
-      clearInterval(refreshTimerRef.current);
+      clearInterval(refreshTimerRef.current)
     }
-    
+
     // Set up new timer for background refresh
     refreshTimerRef.current = setInterval(() => {
-      loadSalesData(false); // Silent refresh (doesn't show loading indicator)
-    }, REFRESH_INTERVAL);
-    
+      loadSalesData(false) // Silent refresh (doesn't show loading indicator)
+    }, REFRESH_INTERVAL)
+
     // Clean up on component unmount
     return () => {
       if (refreshTimerRef.current) {
-        clearInterval(refreshTimerRef.current);
+        clearInterval(refreshTimerRef.current)
       }
-    };
-  }, [loadSalesData]);
+    }
+  }, [loadSalesData])
 
   // Update date range when time range changes
   useEffect(() => {
-    const now = new Date();
-    const newEndDate = new Date(now);
-    let newStartDate = new Date(now);
+    const now = new Date()
+    const newEndDate = new Date(now)
+    const newStartDate = new Date(now)
 
     switch (timeRange) {
-      case 'week':
-        newStartDate.setDate(now.getDate() - 7);
-        break;
-      case 'month':
-        newStartDate.setMonth(now.getMonth() - 1);
-        break;
-      case 'quarter':
-        newStartDate.setMonth(now.getMonth() - 3);
-        break;
-      case 'year':
-        newStartDate.setFullYear(now.getFullYear() - 1);
-        break;
+      case "week":
+        newStartDate.setDate(now.getDate() - 7)
+        break
+      case "month":
+        newStartDate.setMonth(now.getMonth() - 1)
+        break
+      case "quarter":
+        newStartDate.setMonth(now.getMonth() - 3)
+        break
+      case "year":
+        newStartDate.setFullYear(now.getFullYear() - 1)
+        break
       default:
-        newStartDate.setMonth(now.getMonth() - 1);
+        newStartDate.setMonth(now.getMonth() - 1)
     }
 
-    setStartDate(newStartDate);
-    setEndDate(newEndDate);
-  }, [timeRange]);
+    setStartDate(newStartDate)
+    setEndDate(newEndDate)
+  }, [timeRange])
 
   // Load sales data when date range changes
   useEffect(() => {
-    loadSalesData();
-  }, [startDate, endDate, loadSalesData]);
+    loadSalesData()
+  }, [startDate, endDate, loadSalesData])
 
   // Enhanced event listener with optimized callback
   const refreshCallback = useCallback(() => {
-    setIsRefreshing(true);
-    loadSalesData();
-  }, [loadSalesData]);
+    setIsRefreshing(true)
+    loadSalesData()
+  }, [loadSalesData])
 
   // Use the enhanced sync listener
-  useSyncListener(refreshCallback);
+  useSyncListener(refreshCallback)
 
   // Handle refresh button click
   const handleRefresh = () => {
-    setIsRefreshing(true);
-    loadSalesData();
-  };
+    setIsRefreshing(true)
+    loadSalesData()
+  }
 
   // Handle export report
   const handleExportReport = async () => {
     try {
       if (!window.api?.getAppPaths || !window.api?.savePdf) {
-        throw new Error('API no disponible para exportar informes');
+        throw new Error("API no disponible para exportar informes")
       }
 
       setAlert({
-        type: 'info',
-        message: 'Generando informe, por favor espere...'
-      });
-
-      // Get the HTML content to export
-      const reportContent = document.getElementById('report-content');
-      if (!reportContent) {
-        throw new Error('No se pudo capturar el contenido del informe');
-      }
+        type: "info",
+        message: "Generando informe, por favor espere...",
+      })
 
       // Get app paths
-      const paths = await window.api.getAppPaths();
-      const docsPath = paths.documents;
-      const reportPath = `${docsPath}/WilPOS/Informes`;
-      const filename = `informe-ventas-${startDate.toISOString().split('T')[0]}-a-${endDate.toISOString().split('T')[0]}.pdf`;
+      const paths = await window.api.getAppPaths()
+      const docsPath = paths.documents
 
-      // Generate HTML content for the report
-      const htmlContent = `
-        <!DOCTYPE html>
-        <html>
-        <head>
-          <title>Informe de Ventas</title>
-          <meta charset="UTF-8">
-          <style>
-            body { font-family: Arial, sans-serif; margin: 0; padding: 20px; }
-            h1 { color: #1a56db; font-size: 24px; margin-bottom: 20px; }
-            h2 { color: #1e429f; font-size: 18px; margin-top: 30px; margin-bottom: 10px; }
-            .header { text-align: center; margin-bottom: 30px; }
-            .summary { display: flex; justify-content: space-between; margin-bottom: 30px; }
-            .card { background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px; padding: 15px; width: 23%; }
-            .card h3 { font-size: 14px; color: #4b5563; margin-top: 0; margin-bottom: 10px; }
-            .card .value { font-size: 20px; font-weight: bold; color: #111827; }
-            table { width: 100%; border-collapse: collapse; margin-top: 15px; }
-            table th { background: #f3f4f6; text-align: left; padding: 10px; }
-            table td { padding: 10px; border-top: 1px solid #e5e7eb; }
-            .footer { margin-top: 40px; text-align: center; font-size: 12px; color: #6b7280; }
-          </style>
-        </head>
-        <body>
-          <div class="header">
-            <h1>Informe de Ventas - WilPOS</h1>
-            <p>Período: ${startDate.toLocaleDateString()} - ${endDate.toLocaleDateString()}</p>
-          </div>
-          
-          <div class="summary">
-            <div class="card">
-              <h3>Ventas Totales</h3>
-              <div class="value">${formatCurrency(salesData?.period.total || 0)}</div>
-            </div>
-            <div class="card">
-              <h3>Transacciones</h3>
-              <div class="value">${salesData?.period.count || 0}</div>
-            </div>
-            <div class="card">
-              <h3>Ticket Promedio</h3>
-              <div class="value">${formatCurrency(salesData?.period.average || 0)}</div>
-            </div>
-            <div class="card">
-              <h3>Crecimiento</h3>
-              <div class="value">${(salesData?.period.growth || 0).toFixed(1)}%</div>
-            </div>
-          </div>
-          
-          <h2>Ventas por Mes</h2>
-          <table>
-            <thead>
-              <tr>
-                <th>Mes</th>
-                <th>Ventas</th>
-                <th>Transacciones</th>
-                <th>Ticket Promedio</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${salesData?.byMonth.map(month => `
-                <tr>
-                  <td>${month.month}</td>
-                  <td>${formatCurrency(month.total)}</td>
-                  <td>${month.count}</td>
-                  <td>${formatCurrency(month.count > 0 ? month.total / month.count : 0)}</td>
-                </tr>
-              `).join('') || ''}
-            </tbody>
-          </table>
-          
-          <h2>Productos Más Vendidos</h2>
-          <table>
-            <thead>
-              <tr>
-                <th>Producto</th>
-                <th>Cantidad</th>
-                <th>Total</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${salesData?.topProducts.map(product => `
-                <tr>
-                  <td>${product.nombre}</td>
-                  <td>${product.cantidad_vendida}</td>
-                  <td>${formatCurrency(product.total_vendido)}</td>
-                </tr>
-              `).join('') || ''}
-            </tbody>
-          </table>
-          
-          <div class="footer">
-            <p>Informe generado el ${new Date().toLocaleString()} - WilPOS Sistema de Punto de Venta</p>
-          </div>
-        </body>
-        </html>
-      `;
+      // Crear la carpeta "informe" dentro de WilPOS
+      const reportPath = `${docsPath}/WilPOS/informe`
+
+      // Asegurar que la carpeta existe
+      if (window.api.ensureDir) {
+        const dirResult = await window.api.ensureDir(reportPath)
+        if (!dirResult.success) {
+          throw new Error(`No se pudo crear la carpeta: ${dirResult.error}`)
+        }
+      }
+
+      const filename = `informe-ventas-${startDate.toISOString().split("T")[0]}-a-${endDate.toISOString().split("T")[0]}.pdf`
+
+      // Generate HTML content for the report using the utility
+      const htmlContent = ExportReportUtils.generateSalesReportHTML(startDate, endDate, salesData!, formatCurrency)
 
       // Save as PDF
       const result = await window.api.savePdf({
@@ -472,167 +371,213 @@ const Informes: React.FC = () => {
         options: {
           printBackground: true,
           margins: { top: 20, right: 20, bottom: 20, left: 20 },
-          pageSize: 'A4'
-        }
-      });
+          pageSize: "A4",
+        },
+      })
 
       if (result.success) {
         setAlert({
-          type: 'success',
-          message: `Informe guardado como ${filename}`
-        });
+          type: "success",
+          message: `Informe guardado como ${filename}`,
+        })
+
+        // Intentar abrir la carpeta
+        if (window.api.openFolder) {
+          await window.api.openFolder(reportPath)
+        }
       } else {
-        throw new Error(result.error || 'Error al guardar PDF');
+        throw new Error(result.error || "Error al guardar PDF")
       }
     } catch (error) {
-      console.error('Error exporting report:', error);
+      console.error("Error exporting report:", error)
       setAlert({
-        type: 'error',
-        message: `Error al exportar: ${error instanceof Error ? error.message : 'Error desconocido'}`
-      });
+        type: "error",
+        message: `Error al exportar: ${error instanceof Error ? error.message : "Error desconocido"}`,
+      })
     }
-  };
+  }
 
   // Handle print report
   const handlePrintReport = async () => {
     if (!window.api?.printInvoice) {
       setAlert({
-        type: 'error',
-        message: 'API de impresión no disponible'
-      });
-      return;
+        type: "error",
+        message: "API de impresión no disponible",
+      })
+      return
     }
 
     try {
       setAlert({
-        type: 'info',
-        message: 'Preparando impresión...'
-      });
+        type: "info",
+        message: "Preparando impresión...",
+      })
 
-      // Generate HTML content for printing
-      const htmlContent = `
-        <!DOCTYPE html>
-        <html>
-        <head>
-          <title>Informe de Ventas</title>
-          <meta charset="UTF-8">
-          <style>
-            body { font-family: Arial, sans-serif; margin: 0; padding: 10mm; }
-            h1 { font-size: 18pt; margin-bottom: 10pt; text-align: center; }
-            h2 { font-size: 14pt; margin-top: 15pt; margin-bottom: 5pt; }
-            .header { text-align: center; margin-bottom: 15pt; }
-            table { width: 100%; border-collapse: collapse; margin-top: 10pt; }
-            table th { background: #f3f4f6; text-align: left; padding: 5pt; font-size: 10pt; }
-            table td { padding: 5pt; border-top: 1px solid #e5e7eb; font-size: 10pt; }
-            .footer { margin-top: 20pt; text-align: center; font-size: 8pt; }
-            .summary { margin-bottom: 15pt; }
-            .summary-item { margin-bottom: 5pt; }
-          </style>
-        </head>
-        <body>
-          <div class="header">
-            <h1>Informe de Ventas - WilPOS</h1>
-            <p>Período: ${startDate.toLocaleDateString()} - ${endDate.toLocaleDateString()}</p>
-          </div>
-          
-          <div class="summary">
-            <div class="summary-item">Ventas Totales: ${formatCurrency(salesData?.period.total || 0)}</div>
-            <div class="summary-item">Transacciones: ${salesData?.period.count || 0}</div>
-            <div class="summary-item">Ticket Promedio: ${formatCurrency(salesData?.period.average || 0)}</div>
-            <div class="summary-item">Crecimiento: ${(salesData?.period.growth || 0).toFixed(1)}%</div>
-          </div>
-          
-          <h2>Ventas por Mes</h2>
-          <table>
-            <thead>
-              <tr>
-                <th>Mes</th>
-                <th>Ventas</th>
-                <th>Transacciones</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${salesData?.byMonth.map(month => `
-                <tr>
-                  <td>${month.month}</td>
-                  <td>${formatCurrency(month.total)}</td>
-                  <td>${month.count}</td>
-                </tr>
-              `).join('') || ''}
-            </tbody>
-          </table>
-          
-          <h2>Productos Más Vendidos</h2>
-          <table>
-            <thead>
-              <tr>
-                <th>Producto</th>
-                <th>Cantidad</th>
-                <th>Total</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${salesData?.topProducts.slice(0, 5).map(product => `
-                <tr>
-                  <td>${product.nombre}</td>
-                  <td>${product.cantidad_vendida}</td>
-                  <td>${formatCurrency(product.total_vendido)}</td>
-                </tr>
-              `).join('') || ''}
-            </tbody>
-          </table>
-          
-          <div class="footer">
-            <p>Informe generado el ${new Date().toLocaleString()} - WilPOS</p>
-          </div>
-        </body>
-        </html>
-      `;
+      // Generate HTML content for printing using the utility
+      const htmlContent = ExportReportUtils.generatePrintReportHTML(startDate, endDate, salesData!, formatCurrency)
 
       // Send to printer
       const result = await window.api.printInvoice({
         html: htmlContent,
         printerName: settings?.impresora_termica,
-        silent: false
-      });
+        silent: false,
+      })
 
       if (result.success) {
         setAlert({
-          type: 'success',
-          message: 'Informe enviado a impresión'
-        });
+          type: "success",
+          message: "Informe enviado a impresión",
+        })
       } else {
-        throw new Error(result.error || 'Error al imprimir');
+        throw new Error(result.error || "Error al imprimir")
       }
     } catch (error) {
-      console.error('Error printing report:', error);
+      console.error("Error printing report:", error)
       setAlert({
-        type: 'error',
-        message: `Error al imprimir: ${error instanceof Error ? error.message : 'Error desconocido'}`
-      });
+        type: "error",
+        message: `Error al imprimir: ${error instanceof Error ? error.message : "Error desconocido"}`,
+      })
     }
-  };
+  }
+
+  // Handle email report
+  const handleEmailReport = async () => {
+    try {
+      setAlert({
+        type: "info",
+        message: "Preparando informe para enviar por correo...",
+      })
+
+      // Get app paths
+      const paths = await window.api.getAppPaths()
+      const docsPath = paths.documents
+
+      // Crear la carpeta "informe" dentro de WilPOS
+      const reportPath = `${docsPath}/WilPOS/informe`
+
+      // Asegurar que la carpeta existe
+      if (window.api.ensureDir) {
+        await window.api.ensureDir(reportPath)
+      }
+
+      const filename = `informe-ventas-${startDate.toISOString().split("T")[0]}-a-${endDate.toISOString().split("T")[0]}.pdf`
+      const filePath = `${reportPath}/${filename}`
+
+      // Generate HTML content for the report
+      const htmlContent = ExportReportUtils.generateSalesReportHTML(startDate, endDate, salesData!, formatCurrency)
+
+      // Save as PDF first
+      const result = await window.api.savePdf({
+        html: htmlContent,
+        path: filePath,
+        options: {
+          printBackground: true,
+          margins: { top: 20, right: 20, bottom: 20, left: 20 },
+          pageSize: "A4",
+        },
+      })
+
+      if (!result.success) {
+        throw new Error(result.error || "Error al guardar PDF")
+      }
+
+      // Check if we have a mail API
+      if (window.api.sendMail) {
+        const emailResult = await window.api.sendMail({
+          subject: `Informe de Ventas ${startDate.toLocaleDateString()} - ${endDate.toLocaleDateString()}`,
+          body: `Adjunto encontrará el informe de ventas para el período ${startDate.toLocaleDateString()} - ${endDate.toLocaleDateString()}.`,
+          attachments: [filePath],
+        })
+
+        if (emailResult.success) {
+          setAlert({
+            type: "success",
+            message: "Informe enviado por correo electrónico",
+          })
+        } else {
+          throw new Error(emailResult.error || "Error al enviar correo")
+        }
+      } else {
+        // Fallback to opening default mail client
+        const mailtoLink = `mailto:?subject=Informe%20de%20Ventas&body=Adjunto%20encontrará%20el%20informe%20de%20ventas.%0A%0ARuta%20del%20archivo:%20${encodeURIComponent(filePath)}`
+        window.open(mailtoLink)
+
+        setAlert({
+          type: "info",
+          message: `Informe guardado en: ${filePath}. Abra su cliente de correo para adjuntarlo.`,
+        })
+      }
+    } catch (error) {
+      console.error("Error sending report by email:", error)
+      setAlert({
+        type: "error",
+        message: `Error al enviar por correo: ${error instanceof Error ? error.message : "Error desconocido"}`,
+      })
+    }
+  }
+
+  // Open report folder
+  const handleOpenReportFolder = async () => {
+    try {
+      // Get app paths
+      const paths = await window.api.getAppPaths()
+      const docsPath = paths.documents
+
+      // Ruta de la carpeta "informe"
+      const reportPath = `${docsPath}/WilPOS/informe`
+
+      // Asegurar que la carpeta existe
+      if (window.api.ensureDir) {
+        await window.api.ensureDir(reportPath)
+      }
+
+      // Abrir la carpeta
+      if (window.api.openFolder) {
+        await window.api.openFolder(reportPath)
+        setAlert({
+          type: "info",
+          message: "Carpeta de informes abierta",
+        })
+      } else {
+        setAlert({
+          type: "info",
+          message: `Ruta de informes: ${reportPath}`,
+        })
+      }
+    } catch (error) {
+      console.error("Error opening report folder:", error)
+      setAlert({
+        type: "error",
+        message: `Error al abrir carpeta: ${error instanceof Error ? error.message : "Error desconocido"}`,
+      })
+    }
+  }
 
   // Return to Home
   const handleGoBack = () => {
-    const event = new CustomEvent('componentChange', {
-      detail: { component: 'Home' }
-    });
-    window.dispatchEvent(event);
-  };
+    const event = new CustomEvent("componentChange", {
+      detail: { component: "Home" },
+    })
+    window.dispatchEvent(event)
+  }
+
+  // Toggle export options
+  const toggleExportOptions = () => {
+    setShowExportOptions(!showExportOptions)
+  }
 
   // Alert component
-  const Alert = ({ type, message }: AlertType) => {
+  const Alert = ({ type, message }: { type: AlertType; message: string }) => {
     const colors = {
-      success: { bg: 'bg-green-50', text: 'text-green-800', border: 'border-green-200', icon: Check },
-      warning: { bg: 'bg-yellow-50', text: 'text-yellow-800', border: 'border-yellow-200', icon: AlertTriangle },
-      error: { bg: 'bg-red-50', text: 'text-red-800', border: 'border-red-200', icon: X },
-      info: { bg: 'bg-blue-50', text: 'text-blue-800', border: 'border-blue-200', icon: AlertTriangle }
-    };
-    
-    const style = colors[type] || colors.info;
-    const Icon = style.icon;
-    
+      success: { bg: "bg-green-50", text: "text-green-800", border: "border-green-200", icon: Check },
+      warning: { bg: "bg-yellow-50", text: "text-yellow-800", border: "border-yellow-200", icon: AlertTriangle },
+      error: { bg: "bg-red-50", text: "text-red-800", border: "border-red-200", icon: X },
+      info: { bg: "bg-blue-50", text: "text-blue-800", border: "border-blue-200", icon: AlertTriangle },
+    }
+
+    const style = colors[type] || colors.info
+    const Icon = style.icon
+
     return (
       <div className={`${style.bg} ${style.text} ${style.border} border p-4 rounded-lg flex items-start mb-4`}>
         <Icon className="w-5 h-5 mr-2 mt-0.5 flex-shrink-0" />
@@ -641,19 +586,19 @@ const Informes: React.FC = () => {
           <X className="w-4 h-4" />
         </button>
       </div>
-    );
-  };
+    )
+  }
 
   // Close alert after timeout
   useEffect(() => {
     if (alert) {
       const timer = setTimeout(() => {
-        setAlert(null);
-      }, 5000);
-      
-      return () => clearTimeout(timer);
+        setAlert(null)
+      }, 5000)
+
+      return () => clearTimeout(timer)
     }
-  }, [alert]);
+  }, [alert])
 
   return (
     <div className="min-h-full bg-gray-50 flex flex-col">
@@ -667,10 +612,7 @@ const Informes: React.FC = () => {
       {/* Header */}
       <header className="flex justify-between items-center px-8 py-4 shadow-md bg-white rounded-lg mb-6">
         <div className="flex items-center gap-3">
-          <button 
-            onClick={handleGoBack}
-            className="p-2 rounded-full hover:bg-gray-100 transition-colors"
-          >
+          <button onClick={handleGoBack} className="p-2 rounded-full hover:bg-gray-100 transition-colors">
             <ChevronLeft className="h-5 w-5 text-gray-700" />
           </button>
           <div className="flex items-center gap-2">
@@ -689,33 +631,73 @@ const Informes: React.FC = () => {
             <option value="quarter">Este Trimestre</option>
             <option value="year">Este Año</option>
           </select>
-          <button 
+          <button
             className="flex items-center gap-2 py-2 px-4 rounded-lg bg-gray-100 text-gray-700 hover:bg-gray-200 transition-colors"
             onClick={handleRefresh}
             disabled={isRefreshing}
           >
-            <RefreshCw className={`h-4 w-4 ${isRefreshing ? 'animate-spin' : ''}`} />
+            <RefreshCw className={`h-4 w-4 ${isRefreshing ? "animate-spin" : ""}`} />
             <span className="hidden sm:inline">Actualizar</span>
           </button>
-          <button 
+          <button
             className="flex items-center gap-2 py-2 px-4 rounded-lg bg-blue-100 text-blue-700 hover:bg-blue-200 transition-colors"
             onClick={handlePrintReport}
           >
             <Printer className="h-4 w-4" />
             <span className="hidden sm:inline">Imprimir</span>
           </button>
-          <button 
-            className="flex items-center gap-2 py-2 px-4 rounded-lg bg-blue-600 text-white hover:bg-blue-700 transition-colors"
-            onClick={handleExportReport}
-          >
-            <Download className="h-4 w-4" />
-            <span className="hidden sm:inline">Exportar</span>
-          </button>
+          <div className="relative">
+            <button
+              className="flex items-center gap-2 py-2 px-4 rounded-lg bg-blue-600 text-white hover:bg-blue-700 transition-colors"
+              onClick={toggleExportOptions}
+            >
+              <Download className="h-4 w-4" />
+              <span className="hidden sm:inline">Exportar</span>
+            </button>
+
+            {/* Export options dropdown */}
+            {showExportOptions && (
+              <div className="absolute right-0 mt-2 w-48 bg-white rounded-md shadow-lg z-10">
+                <div className="py-1">
+                  <button
+                    className="flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 w-full text-left"
+                    onClick={() => {
+                      setShowExportOptions(false)
+                      handleExportReport()
+                    }}
+                  >
+                    <FileText className="h-4 w-4" />
+                    <span>Exportar como PDF</span>
+                  </button>
+                  <button
+                    className="flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 w-full text-left"
+                    onClick={() => {
+                      setShowExportOptions(false)
+                      handleEmailReport()
+                    }}
+                  >
+                    <Mail className="h-4 w-4" />
+                    <span>Enviar por correo</span>
+                  </button>
+                  <button
+                    className="flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 w-full text-left"
+                    onClick={() => {
+                      setShowExportOptions(false)
+                      handleOpenReportFolder()
+                    }}
+                  >
+                    <Folder className="h-4 w-4" />
+                    <span>Abrir carpeta</span>
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       </header>
 
       {/* Main content */}
-      <main className="flex-1 px-8 py-6" id="report-content">
+      <main className="flex-1 px-8 py-6" id="report-content" ref={reportContentRef}>
         {/* Add refresh indicator */}
         {isRefreshing && !isLoading && (
           <div className="fixed top-20 right-8 bg-blue-100 text-blue-800 py-2 px-4 rounded-lg shadow-md flex items-center gap-2 z-50">
@@ -723,7 +705,7 @@ const Informes: React.FC = () => {
             <span>Actualizando datos...</span>
           </div>
         )}
-        
+
         {isLoading ? (
           <div className="flex justify-center items-center h-64">
             <div className="text-center">
@@ -756,7 +738,7 @@ const Informes: React.FC = () => {
                   <span className="ml-1">vs. período anterior</span>
                 </div>
               </div>
-              
+
               <div className="bg-white p-6 rounded-xl shadow-sm">
                 <div className="flex justify-between items-start mb-4">
                   <h3 className="text-sm font-medium text-gray-600">Valor Promedio de Ticket</h3>
@@ -768,7 +750,7 @@ const Informes: React.FC = () => {
                   <span>Promedio del período</span>
                 </div>
               </div>
-              
+
               <div className="bg-white p-6 rounded-xl shadow-sm">
                 <div className="flex justify-between items-start mb-4">
                   <h3 className="text-sm font-medium text-gray-600">Total de Transacciones</h3>
@@ -780,9 +762,9 @@ const Informes: React.FC = () => {
                   <span>Clientes atendidos</span>
                 </div>
               </div>
-              
+
               <div className="bg-white p-6 rounded-xl shadow-sm">
-              <div className="flex justify-between items-start mb-4">
+                <div className="flex justify-between items-start mb-4">
                   <h3 className="text-sm font-medium text-gray-600">Ventas de Hoy</h3>
                   <Store className="h-5 w-5 text-blue-600" />
                 </div>
@@ -793,7 +775,7 @@ const Informes: React.FC = () => {
                 </div>
               </div>
             </div>
-            
+
             {/* Sales trend chart */}
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
               <div className="lg:col-span-2 bg-white p-6 rounded-xl shadow-sm">
@@ -817,26 +799,18 @@ const Informes: React.FC = () => {
                             style={{
                               height: `${Math.max(
                                 5,
-                                ((month.total /
-                                  Math.max(
-                                    ...salesData.byMonth.map((m) => m.total),
-                                    1
-                                  )) *
-                                  100) *
-                                  2
-                              )}px`
+                                (month.total / Math.max(...salesData.byMonth.map((m) => m.total), 1)) * 100 * 2,
+                              )}px`,
                             }}
                           ></div>
-                          <div className="text-xs text-gray-500 mt-1 truncate w-full text-center">
-                            {month.month}
-                          </div>
+                          <div className="text-xs text-gray-500 mt-1 truncate w-full text-center">{month.month}</div>
                         </div>
                       ))}
                     </div>
                   )}
                 </div>
               </div>
-              
+
               <div className="bg-white p-6 rounded-xl shadow-sm">
                 <h3 className="text-lg font-medium text-gray-800 mb-4">Ventas por Categoría</h3>
                 <div className="h-64 relative">
@@ -850,9 +824,7 @@ const Informes: React.FC = () => {
                         <div key={index} className="relative">
                           <div className="flex justify-between mb-1">
                             <span className="text-sm text-gray-600">{category.category}</span>
-                            <span className="text-sm font-medium">
-                              {formatCurrency(category.total)}
-                            </span>
+                            <span className="text-sm font-medium">{formatCurrency(category.total)}</span>
                           </div>
                           <div className="h-2 bg-gray-200 rounded-full">
                             <div
@@ -860,14 +832,12 @@ const Informes: React.FC = () => {
                               style={{ width: `${category.percentage || 0}%` }}
                             ></div>
                           </div>
-                          <span className="absolute right-0 -top-6 text-xs text-gray-500">
-                            {category.percentage}%
-                          </span>
+                          <span className="absolute right-0 -top-6 text-xs text-gray-500">{category.percentage}%</span>
                         </div>
                       ))}
                     </div>
                   )}
-                  
+
                   <div className="absolute bottom-0 left-0 right-0 text-center">
                     <PieChart className="h-5 w-5 text-gray-400 mx-auto" />
                     <span className="text-xs text-gray-500">Distribución de ventas</span>
@@ -875,7 +845,7 @@ const Informes: React.FC = () => {
                 </div>
               </div>
             </div>
-            
+
             {/* Top selling products */}
             <div className="bg-white p-6 rounded-xl shadow-sm mb-8">
               <h3 className="text-lg font-medium text-gray-800 mb-4">Productos Más Vendidos</h3>
@@ -883,16 +853,28 @@ const Informes: React.FC = () => {
                 <table className="min-w-full divide-y divide-gray-200">
                   <thead className="bg-gray-50">
                     <tr>
-                      <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      <th
+                        scope="col"
+                        className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"
+                      >
                         Producto
                       </th>
-                      <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      <th
+                        scope="col"
+                        className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"
+                      >
                         Código
                       </th>
-                      <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      <th
+                        scope="col"
+                        className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"
+                      >
                         Cantidad Vendida
                       </th>
-                      <th scope="col" className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      <th
+                        scope="col"
+                        className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider"
+                      >
                         Total Vendido
                       </th>
                     </tr>
@@ -906,7 +888,7 @@ const Informes: React.FC = () => {
                       </tr>
                     ) : (
                       salesData?.topProducts.map((product, index) => (
-                        <tr key={index} className={index % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
+                        <tr key={index} className={index % 2 === 0 ? "bg-white" : "bg-gray-50"}>
                           <td className="px-6 py-4 whitespace-nowrap">
                             <div className="flex items-center">
                               <div className="w-8 h-8 bg-blue-100 rounded-full flex items-center justify-center text-blue-600 mr-3">
@@ -916,13 +898,15 @@ const Informes: React.FC = () => {
                             </div>
                           </td>
                           <td className="px-6 py-4 whitespace-nowrap">
-                            <div className="text-sm text-gray-500">{product.codigo_barra || 'N/A'}</div>
+                            <div className="text-sm text-gray-500">{product.codigo_barra || "N/A"}</div>
                           </td>
                           <td className="px-6 py-4 whitespace-nowrap">
                             <div className="text-sm text-gray-900 font-medium">{product.cantidad_vendida}</div>
                           </td>
                           <td className="px-6 py-4 whitespace-nowrap text-right">
-                            <div className="text-sm text-gray-900 font-medium">{formatCurrency(product.total_vendido)}</div>
+                            <div className="text-sm text-gray-900 font-medium">
+                              {formatCurrency(product.total_vendido)}
+                            </div>
                           </td>
                         </tr>
                       ))
@@ -931,7 +915,7 @@ const Informes: React.FC = () => {
                 </table>
               </div>
             </div>
-            
+
             {/* Monthly summary */}
             <div className="bg-white p-6 rounded-xl shadow-sm">
               <h3 className="text-lg font-medium text-gray-800 mb-4">Resumen por Mes</h3>
@@ -939,16 +923,28 @@ const Informes: React.FC = () => {
                 <table className="min-w-full divide-y divide-gray-200">
                   <thead className="bg-gray-50">
                     <tr>
-                      <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      <th
+                        scope="col"
+                        className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"
+                      >
                         Mes
                       </th>
-                      <th scope="col" className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      <th
+                        scope="col"
+                        className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider"
+                      >
                         Ventas
                       </th>
-                      <th scope="col" className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      <th
+                        scope="col"
+                        className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider"
+                      >
                         Transacciones
                       </th>
-                      <th scope="col" className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      <th
+                        scope="col"
+                        className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider"
+                      >
                         Ticket Promedio
                       </th>
                     </tr>
@@ -962,7 +958,7 @@ const Informes: React.FC = () => {
                       </tr>
                     ) : (
                       salesData?.byMonth.map((month, index) => (
-                        <tr key={index} className={index % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
+                        <tr key={index} className={index % 2 === 0 ? "bg-white" : "bg-gray-50"}>
                           <td className="px-6 py-4 whitespace-nowrap">
                             <div className="text-sm font-medium text-gray-900">{month.month}</div>
                           </td>
@@ -993,7 +989,9 @@ const Informes: React.FC = () => {
         <div className="flex items-center justify-between text-sm text-gray-600">
           <div className="flex items-center">
             <Calendar className="h-4 w-4 mr-2" />
-            <span>Período: {startDate.toLocaleDateString()} - {endDate.toLocaleDateString()}</span>
+            <span>
+              Período: {startDate.toLocaleDateString()} - {endDate.toLocaleDateString()}
+            </span>
           </div>
           <div className="flex items-center">
             <RefreshCw className="h-4 w-4 mr-2" />
@@ -1002,7 +1000,7 @@ const Informes: React.FC = () => {
         </div>
       </footer>
     </div>
-  );
-};
+  )
+}
 
-export default Informes;
+export default Informes

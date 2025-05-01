@@ -1,20 +1,18 @@
-// src/services/InvoiceManager.ts - Versión simplificada
-import { PreviewSale } from '../types/sales';
-import { PrintResult } from './ThermalPrintService';
-import ThermalPrintService from './ThermalPrintService';
+import type { PreviewSale } from "../types/sales"
+import ThermalPrintService from "./ThermalPrintService"
 
 // Interfaz para opciones de impresión
 export interface PrintOptions {
-  silent?: boolean;
-  printerName?: string;
-  copies?: number;
+  silent?: boolean
+  printerName?: string
+  copies?: number
 }
 
 // Interfaz para opciones de PDF
 export interface SavePdfOptions {
-  directory: string;
-  filename?: string;
-  overwrite?: boolean;
+  directory: string
+  filename?: string
+  overwrite?: boolean
 }
 
 /**
@@ -22,22 +20,22 @@ export interface SavePdfOptions {
  * Actúa como fachada (patrón Facade) para servicios subyacentes
  */
 export class InvoiceManager {
-  private static instance: InvoiceManager;
-  private thermalPrintService: ThermalPrintService;
-  
+  private static instance: InvoiceManager
+  private thermalPrintService: ThermalPrintService
+
   // Constructor privado
   private constructor() {
-    this.thermalPrintService = ThermalPrintService.getInstance();
+    this.thermalPrintService = ThermalPrintService.getInstance()
   }
-  
+
   // Obtener instancia singleton
   public static getInstance(): InvoiceManager {
     if (!InvoiceManager.instance) {
-      InvoiceManager.instance = new InvoiceManager();
+      InvoiceManager.instance = new InvoiceManager()
     }
-    return InvoiceManager.instance;
+    return InvoiceManager.instance
   }
-  
+
   /**
    * Imprime una factura
    * @param sale Datos de la venta
@@ -45,27 +43,23 @@ export class InvoiceManager {
    * @param options Opciones de impresión
    * @returns Resultado de la operación
    */
-  public async printInvoice(
-    sale: PreviewSale,
-    htmlContent?: string,
-    options?: PrintOptions
-  ): Promise<boolean> {
+  public async printInvoice(sale: PreviewSale, htmlContent?: string, options?: PrintOptions): Promise<boolean> {
     try {
       // Verificar si la API está disponible
       if (!window.api?.printInvoice && !window.printerApi?.print) {
-        console.error('API de impresión no disponible');
-        return false;
+        console.error("API de impresión no disponible")
+        return false
       }
-      
+
       // Usar ThermalPrintService para imprimir
-      const result = await this.thermalPrintService.printReceipt(sale);
-      return result.success;
+      const result = await this.thermalPrintService.printReceipt(sale)
+      return result.success
     } catch (error) {
-      console.error('Error al imprimir:', error);
-      return false;
+      console.error("Error al imprimir:", error)
+      return false
     }
   }
-  
+
   /**
    * Guardar factura como PDF
    * @param sale Datos de la venta
@@ -76,61 +70,61 @@ export class InvoiceManager {
   public async saveAsPdf(
     sale: PreviewSale,
     htmlContent: string,
-    options?: Partial<SavePdfOptions>
+    options?: Partial<SavePdfOptions>,
   ): Promise<string | null> {
     try {
       // Verificar si la API está disponible
       if (!window.api?.savePdf && !window.printerApi?.savePdf) {
-        console.warn('API para guardar PDF no disponible');
-        return null;
+        console.warn("API para guardar PDF no disponible")
+        return null
       }
-      
+
       // Cargar configuración si es necesario
-      let saveDirectory = options?.directory || '';
+      let saveDirectory = options?.directory || ""
       if (!saveDirectory && window.api?.getSettings) {
-        const settings = await window.api.getSettings();
-        saveDirectory = settings?.ruta_pdf || '';
-        
+        const settings = await window.api.getSettings()
+        saveDirectory = settings?.ruta_pdf || ""
+
         if (!saveDirectory && window.api.getAppPaths) {
-          const paths = await window.api.getAppPaths();
-          saveDirectory = `${paths.documents}/WilPOS/Facturas`;
+          const paths = await window.api.getAppPaths()
+          // Usar la carpeta "informe" dentro de WilPOS
+          saveDirectory = `${paths.documents}/WilPOS/informe`
         }
       }
-      
+
       // Generar nombre de archivo si no se proporciona
-      const filename = options?.filename || 
-        `factura-${sale.id || 'temp'}-${new Date().toISOString().split('T')[0]}.pdf`;
-      
+      const filename = options?.filename || `factura-${sale.id || "temp"}-${new Date().toISOString().split("T")[0]}.pdf`
+
       // Ruta completa
-      const filePath = `${saveDirectory}/${filename}`;
-      
+      const filePath = `${saveDirectory}/${filename}`
+
       // Guardar PDF
-      let result;
+      let result
       if (window.printerApi?.savePdf) {
         result = await window.printerApi.savePdf({
           html: htmlContent,
           path: filePath,
-          options: { printBackground: true }
-        });
+          options: { printBackground: true },
+        })
       } else if (window.api?.savePdf) {
         result = await window.api.savePdf({
           html: htmlContent,
           path: filePath,
-          options: { printBackground: true }
-        });
+          options: { printBackground: true },
+        })
       }
-      
+
       if (!result?.success) {
-        throw new Error(result?.error || 'Error al guardar PDF');
+        throw new Error(result?.error || "Error al guardar PDF")
       }
-      
-      return result.path || filePath;
+
+      return result.path || filePath
     } catch (error) {
-      console.error('Error al guardar como PDF:', error);
-      return null;
+      console.error("Error al guardar como PDF:", error)
+      return null
     }
   }
-  
+
   /**
    * Generar HTML para impresora térmica
    * @param sale Datos de la venta
@@ -145,7 +139,7 @@ export class InvoiceManager {
         <html>
         <head>
           <meta charset="UTF-8">
-          <title>Factura ${sale.id || 'Temporal'}</title>
+          <title>Factura ${sale.id || "Temporal"}</title>
           <style>
             @page {
               margin: 0;
@@ -225,9 +219,9 @@ export class InvoiceManager {
           <!-- Header Section -->
           <div class="header">
             <div class="company">WILPOS</div>
-            <div class="invoice-id">Factura #${sale.id || 'N/A'}</div>
+            <div class="invoice-id">Factura #${sale.id || "N/A"}</div>
             <div>Fecha: ${new Date(sale.fecha_venta).toLocaleString()}</div>
-            <div>Cliente: ${sale.cliente || 'Cliente General'}</div>
+            <div>Cliente: ${sale.cliente || "Cliente General"}</div>
           </div>
 
           <!-- Items Section -->
@@ -239,14 +233,18 @@ export class InvoiceManager {
               <th class="right">PRECIO</th>
               <th class="right">TOTAL</th>
             </tr>
-            ${sale.detalles.map(item => `
+            ${sale.detalles
+              .map(
+                (item) => `
               <tr>
                 <td>${item.quantity}</td>
-                <td>${item.name.substring(0, 18)}${item.name.length > 18 ? '...' : ''}</td>
+                <td>${item.name.substring(0, 18)}${item.name.length > 18 ? "..." : ""}</td>
                 <td class="right">${this.formatCurrency(item.price)}</td>
                 <td class="right">${this.formatCurrency(item.subtotal)}</td>
               </tr>
-            `).join('')}
+            `,
+              )
+              .join("")}
           </table>
 
           <!-- Totals -->
@@ -256,19 +254,27 @@ export class InvoiceManager {
               <span>${this.formatCurrency(sale.total - sale.impuestos)}</span>
             </div>
             
-            ${sale.impuestos > 0 ? `
+            ${
+              sale.impuestos > 0
+                ? `
               <div class="total-row">
                 <span>Impuestos:</span>
                 <span>${this.formatCurrency(sale.impuestos)}</span>
               </div>
-            ` : ''}
+            `
+                : ""
+            }
             
-            ${sale.descuento > 0 ? `
+            ${
+              sale.descuento > 0
+                ? `
               <div class="total-row">
                 <span>Descuento:</span>
                 <span>-${this.formatCurrency(sale.descuento)}</span>
               </div>
-            ` : ''}
+            `
+                : ""
+            }
             
             <div class="grand-total">
               <span>TOTAL:</span>
@@ -276,7 +282,9 @@ export class InvoiceManager {
             </div>
 
             <!-- Payment Information -->
-            ${sale.metodo_pago === 'Efectivo' ? `
+            ${
+              sale.metodo_pago === "Efectivo"
+                ? `
               <div class="total-row">
                 <span>Recibido:</span>
                 <span>${this.formatCurrency(sale.monto_recibido)}</span>
@@ -285,12 +293,14 @@ export class InvoiceManager {
                 <span>Cambio:</span>
                 <span>${this.formatCurrency(sale.cambio)}</span>
               </div>
-            ` : `
+            `
+                : `
               <div class="total-row">
                 <span>Método de pago:</span>
                 <span>${sale.metodo_pago}</span>
               </div>
-            `}
+            `
+            }
           </div>
 
           <!-- Footer Section -->
@@ -301,9 +311,9 @@ export class InvoiceManager {
           </div>
         </body>
         </html>
-      `;
+      `
     } catch (error) {
-      console.error('Error generating thermal print HTML:', error);
+      console.error("Error generating thermal print HTML:", error)
       return `
         <!DOCTYPE html>
         <html>
@@ -315,14 +325,14 @@ export class InvoiceManager {
           </style>
         </head>
         <body>
-          <h2>Factura #${sale?.id || 'N/A'}</h2>
+          <h2>Factura #${sale?.id || "N/A"}</h2>
           <p>Fecha: ${new Date().toLocaleString()}</p>
           <p>Total: ${this.formatCurrency(sale?.total || 0)}</p>
           <p>Gracias por su compra</p>
           <p>WILPOS - Sistema de Punto de Venta</p>
         </body>
         </html>
-      `;
+      `
     }
   }
 
@@ -338,7 +348,7 @@ export class InvoiceManager {
         <html>
         <head>
           <meta charset="UTF-8">
-          <title>Factura ${sale.id || 'Temporal'}</title>
+          <title>Factura ${sale.id || "Temporal"}</title>
           <style>
             @page {
               margin: 10mm;
@@ -419,16 +429,16 @@ export class InvoiceManager {
               <div>Sistema de Punto de Venta</div>
             </div>
             
-            <div class="invoice-title">FACTURA #${sale.id || 'N/A'}</div>
+            <div class="invoice-title">FACTURA #${sale.id || "N/A"}</div>
             
             <div class="invoice-details">
               <div>
                 <div><strong>Fecha:</strong> ${new Date(sale.fecha_venta).toLocaleString()}</div>
-                <div><strong>Cliente:</strong> ${sale.cliente || 'Cliente General'}</div>
+                <div><strong>Cliente:</strong> ${sale.cliente || "Cliente General"}</div>
               </div>
               <div>
                 <div><strong>Método de pago:</strong> ${sale.metodo_pago}</div>
-                <div><strong>Estado:</strong> ${sale.estado || 'Completada'}</div>
+                <div><strong>Estado:</strong> ${sale.estado || "Completada"}</div>
               </div>
             </div>
             
@@ -443,28 +453,36 @@ export class InvoiceManager {
                 </tr>
               </thead>
               <tbody>
-                ${sale.detalles.map(item => `
+                ${sale.detalles
+                  .map(
+                    (item) => `
                   <tr>
                     <td>${item.name}</td>
                     <td>${item.quantity}</td>
                     <td>${this.formatCurrency(item.price)}</td>
-                    <td>${item.is_exempt ? 'Exento' : (item.itebis * 100).toFixed(0) + '%'}</td>
+                    <td>${item.is_exempt ? "Exento" : (item.itebis * 100).toFixed(0) + "%"}</td>
                     <td>${this.formatCurrency(item.subtotal)}</td>
                   </tr>
-                `).join('')}
+                `,
+                  )
+                  .join("")}
               </tbody>
             </table>
             
             <div class="totals">
               <div><strong>Subtotal:</strong> ${this.formatCurrency(sale.total - sale.impuestos)}</div>
               <div><strong>ITBIS:</strong> ${this.formatCurrency(sale.impuestos)}</div>
-              ${sale.descuento > 0 ? `<div><strong>Descuento:</strong> -${this.formatCurrency(sale.descuento)}</div>` : ''}
+              ${sale.descuento > 0 ? `<div><strong>Descuento:</strong> -${this.formatCurrency(sale.descuento)}</div>` : ""}
               <div class="total-line"><strong>TOTAL:</strong> ${this.formatCurrency(sale.total)}</div>
               
-              ${sale.metodo_pago === 'Efectivo' ? `
+              ${
+                sale.metodo_pago === "Efectivo"
+                  ? `
                 <div><strong>Monto recibido:</strong> ${this.formatCurrency(sale.monto_recibido)}</div>
                 <div><strong>Cambio:</strong> ${this.formatCurrency(sale.cambio)}</div>
-              ` : ''}
+              `
+                  : ""
+              }
             </div>
             
             <div class="footer">
@@ -474,9 +492,9 @@ export class InvoiceManager {
           </div>
         </body>
         </html>
-      `;
+      `
     } catch (error) {
-      console.error('Error generating print HTML:', error);
+      console.error("Error generating print HTML:", error)
       return `
         <!DOCTYPE html>
         <html>
@@ -488,13 +506,13 @@ export class InvoiceManager {
           </style>
         </head>
         <body>
-          <h2>Factura #${sale?.id || 'N/A'}</h2>
+          <h2>Factura #${sale?.id || "N/A"}</h2>
           <p>Fecha: ${new Date().toLocaleString()}</p>
           <p>Total: ${this.formatCurrency(sale?.total || 0)}</p>
           <p>Gracias por su compra</p>
         </body>
         </html>
-      `;
+      `
     }
   }
 
@@ -506,16 +524,16 @@ export class InvoiceManager {
   private formatCurrency(amount: number): string {
     try {
       // Formatear usando Intl.NumberFormat
-      return new Intl.NumberFormat('es-DO', { 
-        style: 'currency', 
-        currency: 'DOP',
-        minimumFractionDigits: 2
-      }).format(amount);
+      return new Intl.NumberFormat("es-DO", {
+        style: "currency",
+        currency: "DOP",
+        minimumFractionDigits: 2,
+      }).format(amount)
     } catch (error) {
       // Formato alternativo en caso de error
-      return `RD$ ${amount.toFixed(2)}`;
+      return `RD$ ${amount.toFixed(2)}`
     }
   }
 }
 
-export default InvoiceManager;
+export default InvoiceManager
