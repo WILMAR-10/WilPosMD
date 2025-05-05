@@ -314,13 +314,28 @@ const Configuracion: React.FC = () => {
   // Function to test the selected printer
   const testSelectedPrinter = async () => {
     try {
-      const api = window.printerApi;
-      if (!api?.testPrinter) throw new Error('Printer API or test function not available');
-      const result = await api.testPrinter(formData.impresora_termica);
-      if (result.success) {
-        setAlert({ type: 'success', message: 'Prueba de impresora enviada correctamente. Revise la impresora.' });
+      // First check if printerApi exists at all
+      if (!window.printerApi) {
+        throw new Error('Printer API not available');
+      }
+      
+      // Then check if we have a printer name configured
+      if (!formData.impresora_termica) {
+        throw new Error('No printer selected. Please select a printer first.');
+      }
+      
+      // Now we can safely use the testPrinter function
+      // The non-null assertion operator (!) tells TypeScript that we know testPrinter exists
+      const result = await window.printerApi.testPrinter!(formData.impresora_termica);
+      
+      if (result && result.success) {
+        setAlert({ 
+          type: 'success', 
+          message: 'Prueba de impresora enviada correctamente. Revise la impresora.' 
+        });
       } else {
-        throw new Error(result.error || 'Unknown error testing printer');
+        const errorMsg = result?.error || 'Error desconocido al probar la impresora';
+        throw new Error(errorMsg);
       }
     } catch (error) {
       console.error('Error testing printer:', error);

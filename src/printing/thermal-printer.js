@@ -187,35 +187,69 @@ export async function sendRawCommands(commands, printerName) {
 
 // Test printer with simple content
 export async function testPrinter(printerName) {
-  if (!printerName) {
-    return { success: false, error: 'Printer name required' };
-  }
+  console.log(`testPrinter called for printer: "${printerName}"`);
+  
   try {
-    const testHTML = `
-      <!DOCTYPE html><html><head><meta charset="UTF-8"><style>
-      @page{margin:0;size:80mm auto;}body{font-family:Arial;text-align:center;
-      padding:10mm;width:72mm;margin:0 auto;font-size:10pt;}
-      .title{font-size:14pt;font-weight:bold;margin-bottom:5mm;}
-      .content{margin-bottom:5mm;} .footer{margin-top:10mm;
-      font-size:8pt;border-top:1px dashed #000;padding-top:2mm;}
-      </style></head><body>
-      <div class="title">PÁGINA DE PRUEBA</div>
-      <div class="content">
-        <p>Prueba de impresora: ${printerName}</p>
-        <p>Fecha: ${new Date().toLocaleString()}</p>
-      </div>
-      <div class="footer">WilPOS - Sistema de Punto de Venta</div>
-      </body></html>
+    if (!printerName) {
+      console.log('testPrinter error: No printer name provided');
+      return { 
+        success: false, 
+        error: 'Printer name is required' 
+      };
+    }
+    
+    // Simple test page content
+    const testContent = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="UTF-8">
+        <title>Test Page</title>
+        <style>
+          body { font-family: Arial; text-align: center; }
+          .title { font-weight: bold; margin: 20px 0; }
+        </style>
+      </head>
+      <body>
+        <div class="title">WILPOS TEST PAGE</div>
+        <p>Testing printer: ${printerName}</p>
+        <p>Date: ${new Date().toLocaleString()}</p>
+      </body>
+      </html>
     `;
-    return await printWithThermalPrinter({
-      html: testHTML,
-      printerName,
-      silent: true,
-      options: { thermalPrinter: true }
+    
+    // Create a hidden window for printing
+    const win = new BrowserWindow({ 
+      width: 300, 
+      height: 300, 
+      show: false 
     });
+    
+    await win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(testContent)}`);
+    
+    console.log(`Sending print job to "${printerName}"...`);
+    
+    const result = await win.webContents.print({
+      silent: true,
+      printBackground: true,
+      deviceName: printerName
+    });
+    
+    win.close();
+    
+    console.log(`Print result: ${result ? 'Success' : 'Failed'}`);
+    
+    return { 
+      success: !!result, 
+      message: result ? 'Test page sent to printer' : 'Print job failed',
+      error: result ? undefined : 'Printer returned failure'
+    };
   } catch (error) {
-    console.error('Error testing printer:', error);
-    return { success: false, error: error.message || 'Unknown error' };
+    console.error('testPrinter detailed error:', error);
+    return { 
+      success: false, 
+      error: error.message || 'Unknown printer error' 
+    };
   }
 }
 

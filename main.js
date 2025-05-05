@@ -20,7 +20,8 @@ import {
 import {
   printWithThermalPrinter,
   getPrinters,
-  savePdf
+  savePdf,
+  testPrinter
 } from './src/printing/thermal-printer.js';
 
 // Set up directory paths
@@ -271,59 +272,44 @@ async function getSystemPrinters() {
   }
 }
 
-/**
- * Envía comandos ESC/POS crudos creando una ventana oculta.
- */
-async function sendRawCommandsToPrinter(printerName, commands) {
+// Ensure a reliable test-printer handler
+function setupTestPrinterHandler() {
+  const channel = 'test-printer';
+  console.log(`Setting up handler for ${channel}`);
   try {
-    if (!printerName) throw new Error('Printer name is required');
-    const win = new BrowserWindow({ show: false, webPreferences: { contextIsolation: true } });
-    const html = `
-      <!DOCTYPE html><html><head><meta charset="UTF-8"><title>ESC/POS</title>
-      <style>body{margin:0;padding:0;font-family:monospace;}pre{margin:0;white-space:pre;font-size:0;}</style>
-      </head><body><pre>${commands}</pre></body></html>
-    `;
-    await win.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html));
-    const result = await win.webContents.print({
-      silent: true, printBackground: false,
-      deviceName: printerName, margins: { marginType: 'none' }
+    // Remove any existing handler
+    try {
+      ipcMain.removeHandler(channel);
+      console.log(`Removed existing ${channel} handler`);
+    } catch {
+      console.log(`No existing ${channel} handler to remove`);
+    }
+
+    // Register new handler
+    ipcMain.handle(channel, async (event, printerName) => {
+      console.log(`Received ${channel} request for printer: "${printerName}"`);
+      if (!printerName) {
+        console.log(`${channel}: No printer name provided`);
+        return { success: false, error: 'No printer name provided' };
+      }
+      try {
+        const { testPrinter } = await import('./src/printing/thermal-printer.js');
+        console.log(`${channel}: Calling testPrinter for "${printerName}"`);
+        const result = await testPrinter(printerName);
+        console.log(`${channel} result:`, result);
+        return result;
+      } catch (error) {
+        console.error(`${channel} error:`, error);
+        return {
+          success: false,
+          error: `Error testing printer: ${error.message || 'Unknown error'}`
+        };
+      }
     });
-    win.close();
-    return { success: result, message: result ? 'Commands sent successfully' : 'Failed to send commands' };
-  } catch (error) {
-    console.error('Error sending raw commands:', error);
-    return { success: false, error: error.message || 'Unknown error' };
-  }
-}
 
-/**
- * Prueba simple de impresora ESC/POS.
- */
-async function testPrinter(printerName) {
-  if (!printerName) return { success: false, error: 'Printer name required' };
-  try {
-    const testCommands =
-      '\x1B@WILPOS Test Page\n\nDate: ' +
-      new Date().toLocaleString() +
-      '\n\nIf you can read this, your printer is working!\n\n\n\n\x1DV\x00';
-    return await sendRawCommandsToPrinter(printerName, testCommands);
+    console.log(`Successfully registered ${channel} handler`);
   } catch (error) {
-    console.error('Error testing printer:', error);
-    return { success: false, error: error.message };
-  }
-}
-
-/**
- * Abre el cajón de efectivo vía ESC/POS.
- */
-async function openCashDrawer(printerName) {
-  if (!printerName) return { success: false, error: 'Printer name required' };
-  try {
-    const drawerCmd = '\x1B\x70\x00\x19\x19';
-    return await sendRawCommandsToPrinter(printerName, drawerCmd);
-  } catch (error) {
-    console.error('Error opening cash drawer:', error);
-    return { success: false, error: error.message };
+    console.error(`Failed to set up ${channel} handler:`, error);
   }
 }
 
@@ -332,199 +318,76 @@ async function openCashDrawer(printerName) {
 // =====================================================
 function setupAllHandlers(ipcMain, app) {
   const safeRegister = (channel, handler) => {
-    try { ipcMain.removeHandler(channel) } catch { }
+    try { ipcMain.removeHandler(channel); } catch {}
     ipcMain.handle(channel, handler);
-    console.log(`Registrado manejador para ${channel}`);
+    console.log(`Registered handler for ${channel}`);
   };
 
   // Get list of printers
   safeRegister('get-printers', async () => {
     console.log('Handling get-printers request');
     try {
-      const printers = await getPrinters();
-      console.log(`Detected ${printers.printers.length} printers`);
-      return printers;
+      const res = await getPrinters();
+      return res;
     } catch (error) {
       console.error('Error getting printers:', error);
-      return {
-        success: false,
-        printers: [],
-        error: error.message || 'Unknown error getting printers'
-      };
+      return { success: false, printers: [], error: error.message || 'Unknown error' };
     }
   });
 
-
-  // Impresión (térmica o estándar según el destino)
+  // Print handler
   safeRegister('print', async (_, options) => {
-    console.log(`Solicitud de impresión recibida para: ${options.printerName || 'Impresora predeterminada'}`);
-    const isThermal = options.options?.thermalPrinter === true ||
-      (options.printerName && /thermal|receipt|58mm|80mm|pos|epson|tm-/i.test(options.printerName));
+    console.log(`Print request received for: ${options.printerName || 'Default printer'}`);
     try {
-      if (isThermal) {
-        console.log('Utilizando método de impresión térmica');
-        return await printWithThermalPrinter(options);
-      } else {
-        console.log('Utilizando método de impresión estándar');
-        return await printWithElectron(options);
-      }
+      return await printWithThermalPrinter(options);
     } catch (error) {
-      console.error('Error de impresión:', error);
-      return { success: false, error: error.message || 'Error desconocido de impresión' };
+      console.error('Print error:', error);
+      return { success: false, error: error.message || 'Unknown printing error' };
     }
   });
 
-  // Guardar como PDF
+  // Save as PDF handler
   safeRegister('save-pdf', async (_, options) => {
     try {
       return await savePdf(options);
     } catch (error) {
-      console.error('Error al guardar PDF:', error);
-      return { success: false, error: error.message || 'Error desconocido al guardar PDF' };
+      console.error('Save PDF error:', error);
+      return { success: false, error: error.message || 'Unknown PDF error' };
     }
   });
 
-  // Devolver ruta predeterminada para PDFs
+  // Get default PDF path handler
   safeRegister('get-pdf-path', async () => {
     const dir = path.join(app.getPath('documents'), 'WilPOS', 'Facturas');
     await fs.ensureDir(dir);
     return dir;
   });
 
-  // Prueba de conectividad de impresora
-  function setupAllHandlers(ipcMain, app) {
-    const safeRegister = (channel, handler) => {
-      try { ipcMain.removeHandler(channel) } catch { }
-      ipcMain.handle(channel, handler);
-      console.log(`Registered handler for ${channel}`);
-    };
-
-    // Get list of printers
-    safeRegister('get-printers', async () => {
-      return await getPrinters();
-    });
-
-    // Print handler
-    safeRegister('print', async (_, options) => {
-      console.log(`Print request received for: ${options.printerName || 'Default printer'}`);
-      try {
-        return await printWithThermalPrinter(options);
-      } catch (error) {
-        console.error('Print error:', error);
-        return { success: false, error: error.message || 'Unknown printing error' };
+  // Test printer handler
+  safeRegister('test-printer', async (_, printerName) => {
+    console.log(`Testing printer: ${printerName}`);
+    try {
+      if (!printerName) throw new Error('Printer name is required');
+      const list = await getPrinters();
+      if (!list.success) throw new Error('Failed to get printer list');
+      if (!list.printers.some(p => p.name === printerName)) {
+        console.warn(`Printer "${printerName}" not found; attempting test anyway`);
       }
-    });
+      return await testPrinter(printerName);  // calls imported function
+    } catch (error) {
+      console.error('Test printer error:', error);
+      return { success: false, error: error.message };
+    }
+  });
 
-    // Save as PDF handler
-    safeRegister('save-pdf', async (_, options) => {
-      try {
-        return await savePdf(options);
-      } catch (error) {
-        console.error('Save PDF error:', error);
-        return { success: false, error: error.message || 'Unknown PDF error' };
-      }
-    });
-
-    // Get default PDF path handler
-    safeRegister('get-pdf-path', async () => {
-      const dir = path.join(app.getPath('documents'), 'WilPOS', 'Facturas');
-      await fs.ensureDir(dir);
-      return dir;
-    });
-
-    // Test printer handler
-    safeRegister('test-printer', async (_, printerName) => {
-      console.log(`Testing printer: ${printerName || 'Default'}`);
-      try {
-        if (!printerName) {
-          throw new Error('Printer name is required');
-        }
-        
-        // Get list of available printers to verify printer exists
-        const printersResult = await getPrinters();
-        if (!printersResult.success) {
-          throw new Error('Failed to get printer list');
-        }
-        
-        const printerExists = printersResult.printers.some(p => p.name === printerName);
-        if (!printerExists) {
-          console.warn(`Printer "${printerName}" not found in system printers`);
-          // Continue anyway - the printer might still work
-        }
-        
-        const testHTML = `
-          <!DOCTYPE html>
-          <html>
-          <head>
-            <meta charset="UTF-8">
-            <title>Printer Test</title>
-            <style>
-              @page { margin: 0; size: 80mm auto; }
-              body {
-                font-family: Arial, sans-serif;
-                text-align: center;
-                padding: 10mm;
-                width: 72mm;
-                margin: 0 auto;
-              }
-              .title {
-                font-size: 14pt;
-                font-weight: bold;
-                margin-bottom: 5mm;
-              }
-              .content { font-size: 10pt; margin-bottom: 5mm; }
-              .footer {
-                margin-top: 10mm;
-                font-size: 8pt;
-                border-top: 1px dashed #000;
-                padding-top: 2mm;
-              }
-            </style>
-          </head>
-          <body>
-            <div class="title">TEST PAGE</div>
-            <div class="content">
-              <p>Printer test: ${printerName || 'Default'}</p>
-              <p>Date: ${new Date().toLocaleString()}</p>
-            </div>
-            <div class="footer">WilPOS - Point of Sale System</div>
-          </body>
-          </html>
-        `;
-        return await printWithThermalPrinter({
-          html: testHTML,
-          printerName,
-          silent: true,
-          options: { thermalPrinter: true }
-        });
-      } catch (error) {
-        console.error('Test printer error:', error);
-        return { success: false, error: `Test printer error: ${error.message || 'Unknown error'}` };
-      }
-    });
-
-    // Open folder handler
-    safeRegister('openFolder', async (_, folderPath) => {
-      try {
-        await fs.ensureDir(folderPath);
-        await shell.openPath(folderPath);
-        return true;
-      } catch (error) {
-        console.error('Error opening folder:', error);
-        return false;
-      }
-    });
-  }
-
-
-  // Abrir carpeta en el sistema
+  // Open folder handler
   safeRegister('openFolder', async (_, folderPath) => {
     try {
       await fs.ensureDir(folderPath);
       await shell.openPath(folderPath);
       return true;
     } catch (error) {
-      console.error('Error abriendo carpeta:', error);
+      console.error('Error opening folder:', error);
       return false;
     }
   });
@@ -542,6 +405,9 @@ app.whenReady().then(async () => {
     await initializeDatabase();
     setupIpcHandlers();
     setupWindowControls();
+
+    // Explicit test-printer handler
+    setupTestPrinterHandler();
 
     // Use unified handler setup en lugar de setupThermalPrintingHandlers
     setupAllHandlers(ipcMain, app);

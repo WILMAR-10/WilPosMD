@@ -171,14 +171,32 @@ contextBridge.exposeInMainWorld('printerApi', {
   testPrinter: (printerName) => {
     try {
       console.log('printerApi.testPrinter called from renderer', printerName);
+      if (!printerName) {
+        console.warn('No printer name provided to testPrinter');
+        return Promise.resolve({
+          success: false,
+          error: 'Printer name is required'
+        });
+      }
+
       return ipcRenderer.invoke('test-printer', printerName)
+        .then(result => {
+          console.log('testPrinter result:', result);
+          return result;
+        })
         .catch(err => {
           console.error('Error in testPrinter invoke:', err);
-          return { success: false, error: err.message || 'Unknown error' };
+          return {
+            success: false,
+            error: `IPC error: ${err.message || 'Unknown error'}`
+          };
         });
     } catch (error) {
-      console.error('Error in testPrinter:', error);
-      return Promise.resolve({ success: false, error: error.message || 'Unknown error' });
+      console.error('Error in testPrinter function:', error);
+      return Promise.resolve({
+        success: false,
+        error: `Function error: ${error.message || 'Unknown error'}`
+      });
     }
   },
 
