@@ -1,6 +1,5 @@
 ﻿// src/pages/Caja.tsx
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import ThermalPrintService from '../services/ThermalPrintService';
 import InvoiceManager from '../services/InvoiceManager';
 import {
   ShoppingCart, Search, Package, DollarSign, User,
@@ -76,7 +75,6 @@ interface SaleApiResponse {
 }
 
 const Caja: React.FC = () => {
-  const thermalPrintService = ThermalPrintService.getInstance();
   const invoiceManager = InvoiceManager.getInstance();
 
   const [printerStatus, setPrinterStatus] = useState<{
@@ -147,9 +145,6 @@ const Caja: React.FC = () => {
             guardar_pdf: appSettings.guardar_pdf,
             ruta_pdf: appSettings.ruta_pdf
           });
-
-          // Check thermal printer status
-          checkThermalPrinter();
         }
       } catch (error) {
         console.error('Error loading settings:', error);
@@ -177,43 +172,6 @@ const Caja: React.FC = () => {
   };
 
   // Verificar estado de la impresora térmica
-  const checkThermalPrinter = async () => {
-    try {
-      const status = await thermalPrintService.checkPrinterStatus();
-      setPrinterStatus(status);
-
-      // Show alert if a thermal printer was found automatically
-      if (status.available && status.message) {
-        showAlert({
-          type: 'info',
-          message: status.message
-        });
-      }
-    } catch (error) {
-      console.error('Error checking thermal printer status:', error);
-    }
-  };
-
-  useEffect(() => {
-    const checkPrinter = async () => {
-      try {
-        const status = await thermalPrintService.checkPrinterStatus();
-        setPrinterStatus(status);
-
-        // Mostrar alerta si se detecta impresora térmica
-        if (status.available && status.message) {
-          showAlert({
-            type: 'info',
-            message: status.message
-          });
-        }
-      } catch (error) {
-        console.error('Error checking printer status:', error);
-      }
-    };
-
-    checkPrinter();
-  }, []);
 
   // Mostrar diálogo de confirmación
   const showConfirmDialog = (title: string, message: string, onConfirm: () => void, type: 'warning' | 'danger' | 'info' = 'warning') => {
@@ -559,25 +517,6 @@ const Caja: React.FC = () => {
           });
 
           // Imprimir si está habilitado
-          if (printAfterSale) {
-            try {
-              const thermalService = ThermalPrintService.getInstance();
-              const printResult = await thermalService.printReceipt(preview);
-              if (!printResult.success) {
-                console.warn('Advertencia al imprimir:', printResult.message);
-                showAlert({
-                  type: 'warning',
-                  message: `Venta completada, pero hubo problemas al imprimir: ${printResult.message}`
-                });
-              }
-            } catch (printError) {
-              console.error('Error al imprimir:', printError);
-              showAlert({
-                type: 'warning',
-                message: 'Venta completada, pero hubo un error al imprimir el recibo'
-              });
-            }
-          }
 
           // Actualizar stock
           setTimeout(() => fetchProducts(), 1000);
@@ -597,36 +536,6 @@ const Caja: React.FC = () => {
   };
 
   // Test thermal printer
-  const handleTestPrinter = async () => {
-    try {
-      setIsSubmitting(true);
-      const thermalService = ThermalPrintService.getInstance();
-
-      // Verify printer status first
-      const status = await thermalService.checkPrinterStatus();
-      if (!status.available) {
-        throw new Error(`No hay impresora disponible: ${status.message || 'Verifique conexión'}`);
-      }
-
-      console.log(`Probando impresora: ${status.printerName}`);
-      // Try to print a test page
-      const result = await thermalService.testPrinter();
-
-      if (result.success) {
-        showAlert({ type: 'success', message: 'Prueba de impresora exitosa' });
-      } else {
-        throw new Error(result.message);
-      }
-    } catch (error) {
-      console.error('Error en prueba de impresora:', error);
-      showAlert({
-        type: 'error',
-        message: `Error: ${error instanceof Error ? error.message : String(error)}`
-      });
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
 
   // Regresar al home
   const handleGoBack = () => {
@@ -705,113 +614,6 @@ const Caja: React.FC = () => {
       });
     }
   };
-
-  // Manejo de impresión manual mejorado
-  async function handlePrint() {
-    // Si no hay factura seleccionada, pero hay productos en el carrito, crear una vista previa temporal
-    if (!previewSale) {
-      if (cart.length === 0) {
-        showAlert({
-          type: 'error',
-          message: 'No hay recibo para imprimir. Agregue productos al carrito primero.'
-        });
-        return;
-      }
-
-      // Crear objeto de vista previa temporal para impresión
-      const customer = customers.find(c => c.id === selectedCustomer);
-      const customerName = customer ? customer.nombre : 'Cliente General';
-      const tempPreview: PreviewSale = {
-        cliente_id: selectedCustomer,
-        cliente: customerName,
-        total,
-        descuento: discount,
-        impuestos: taxAmount,
-        metodo_pago: paymentMethod,
-        estado: 'Pendiente',
-        fecha_venta: new Date().toISOString(),
-        usuario_id: user?.id,
-        usuario: user?.nombre || 'Usuario',
-        monto_recibido: amountReceived,
-        cambio: calculateChange,
-        detalles: cart.map(item => ({ ...item }))
-      };
-
-      setIsSubmitting(true);
-      try {
-        console.log('Imprimiendo recibo temporal...');
-        const thermalService = ThermalPrintService.getInstance();
-        // Verificar estado de la impresora
-        const status = await thermalService.checkPrinterStatus();
-        if (!status.available) {
-          throw new Error(`No hay impresora disponible: ${status.message}`);
-        }
-        console.log(`Imprimiendo en: ${status.printerName}`);
-        const result = await thermalService.printReceipt(tempPreview);
-        if (result.success) {
-          showAlert({ type: 'success', message: 'Borrador de recibo enviado a la impresora' });
-        } else {
-          throw new Error(result.message || 'Error al imprimir');
-        }
-      } catch (err) {
-        console.error('Error de impresión:', err);
-        showAlert({
-          type: 'error',
-          message: `Error de impresión: ${err instanceof Error ? err.message : String(err)}`
-        });
-        // Intentar impresión simplificada por raw ESC/POS
-        try {
-          console.log('Intentando impresión alternativa...');
-          if (window.printerApi?.printRaw) {
-            const simple = `\x1B@\x1Ba\x01WILPOS\n\nBORRADOR DE FACTURA\n\nTotal: ${total.toFixed(2)}\nFecha: ${new Date().toLocaleString()}\n\n\x1D\x56\x42\x00`;
-            await window.printerApi.printRaw(simple, printerStatus?.printerName);
-            showAlert({ type: 'warning', message: 'Se envió un recibo simplificado a la impresora' });
-          }
-        } catch (altErr) {
-          console.error('Error en impresión alternativa:', altErr);
-        }
-      } finally {
-        setIsSubmitting(false);
-      }
-      return;
-    }
-
-    // Imprimir si hay una venta previsualizada
-    setIsSubmitting(true);
-    try {
-      console.log('Imprimiendo venta guardada:', previewSale.id);
-      const thermalService = ThermalPrintService.getInstance();
-      const status = await thermalService.checkPrinterStatus();
-      if (!status.available) {
-        throw new Error(`No hay impresora disponible: ${status.message}`);
-      }
-      console.log(`Imprimiendo en: ${status.printerName}`);
-      const result = await thermalService.printReceipt(previewSale);
-      if (result.success) {
-        showAlert({ type: 'success', message: 'Recibo enviado a la impresora térmica' });
-      } else {
-        throw new Error(result.message || 'Error al imprimir');
-      }
-    } catch (err) {
-      console.error('Error de impresión:', err);
-      showAlert({
-        type: 'error',
-        message: `Error de impresión: ${err instanceof Error ? err.message : String(err)}`
-      });
-      // Intentar raw simplificado
-      try {
-        if (window.printerApi?.printRaw) {
-          const simple = `\x1B@\x1Ba\x01WILPOS\n\nFACTURA #${previewSale.id || 'N/A'}\n\nTotal: ${previewSale.total.toFixed(2)}\nFecha: ${new Date(previewSale.fecha_venta).toLocaleString()}\n\n\x1D\x56\x42\x00`;
-          await window.printerApi.printRaw(simple, printerStatus?.printerName);
-          showAlert({ type: 'warning', message: 'Se envió un recibo simplificado a la impresora' });
-        }
-      } catch (altErr) {
-        console.error('Error en impresión alternativa:', altErr);
-      }
-    } finally {
-      setIsSubmitting(false);
-    }
-  }
 
   // Seleccionar cliente y guardar su nombre
   useEffect(() => {

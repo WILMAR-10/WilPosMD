@@ -14,7 +14,6 @@ import InvoiceManager from '../services/InvoiceManager';
 import DatePicker from 'react-datepicker';
 import "react-datepicker/dist/react-datepicker.css";
 import { PreviewSale } from '../types/sales';
-import ThermalPrintService from '../services/ThermalPrintService';
 
 // Tipos
 type AlertType = 'success' | 'warning' | 'error' | 'info';
@@ -286,55 +285,6 @@ const Factura: React.FC = () => {
       showAlert('error', 'Error al cargar detalles de la factura');
     }
   };
-
-  // Manejo de impresión manual simplificado
-  async function handlePrint() {
-    if (!state.selectedInvoice) {
-      showAlert('warning', 'No hay factura seleccionada para imprimir');
-      return;
-    }
-
-    try {
-      if (!facturaRef.current) {
-        throw new Error('Referencia de factura no disponible');
-      }
-
-      const thermalService = ThermalPrintService.getInstance();
-      const printerStatus = await thermalService.checkPrinterStatus();
-      setIsSubmitting(true);
-
-      if (printerStatus.available) {
-        const result = await thermalService.printReceipt(state.selectedInvoice);
-        if (result.success) {
-          showAlert('success', 'Factura enviada a impresora térmica');
-        } else {
-          throw new Error(result.message || 'Error al imprimir');
-        }
-      } else {
-        const mgr = InvoiceManager.getInstance();
-        const html = mgr.generatePrintHTML(state.selectedInvoice);
-        const success = await mgr.printInvoice(
-          state.selectedInvoice,
-          html,
-          { silent: true, printerName: settings?.impresora_termica }
-        );
-        if (success) {
-          showAlert('success', 'Factura enviada a impresora estándar');
-        } else {
-          throw new Error('Error al imprimir');
-        }
-      }
-    } catch (error) {
-      console.error('Error al imprimir:', error);
-      showAlert(
-        'error',
-        'Error al imprimir la factura: ' +
-          (error instanceof Error ? error.message : 'Error desconocido')
-      );
-    } finally {
-      setIsSubmitting(false);
-    }
-  }
 
   // Exportar factura como PDF simplificado
   const handleExportPDF = async () => {
