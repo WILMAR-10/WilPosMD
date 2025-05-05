@@ -9,6 +9,7 @@ export interface DiagnosticResult {
     name: string;
     isDefault?: boolean;
     isThermal?: boolean;
+    portName?: string;
     status?: string;
   }>;
   activePrinter?: string | null;
@@ -46,6 +47,14 @@ export class PrinterDiagnostic {
         };
       }
       
+      // Detect USB printers
+      const usbPrinters = printers.filter(p =>
+        (p.portName?.toLowerCase().includes('usb')) ||
+        (p.name.toLowerCase().includes('usb')) ||
+        (p.name.toLowerCase().includes('80mm'))
+      );
+      console.log('USB printers detected:', usbPrinters);
+
       // Get current printer status
       const printerStatus = await this.thermalPrintService.checkPrinterStatus();
       
@@ -54,6 +63,7 @@ export class PrinterDiagnostic {
         name: printer.name,
         isDefault: printer.isDefault,
         isThermal: printer.isThermal,
+        portName: printer.portName,
         status: printer.name === printerStatus.printerName ? 
           (printerStatus.available ? 'Active' : 'Error') : 'Available'
       }));
@@ -69,11 +79,23 @@ export class PrinterDiagnostic {
         status = 'warning';
         message = 'No thermal printers detected';
         details.push('System will use standard printers for receipt printing');
+      } else {
+        details.push(`Found ${thermalPrinters.length} thermal printer(s)`);
+        thermalPrinters.forEach(p => {
+          details.push(`Thermal printer: ${p.name}${p.portName ? ` (Port: ${p.portName})` : ''}`);
+        });
+      }
+      
+      // Check if there are any USB printers
+      if (usbPrinters.length > 0) {
+        details.push(`Found ${usbPrinters.length} USB printer(s)`);
+        status = 'success';
+        message = 'USB printer detected';
       }
       
       // Check if active printer is available
       if (!printerStatus.available) {
-        status = 'error';
+        status = 'warning';
         message = printerStatus.message || 'Printer not available';
         details.push('No working printer configured for receipts');
       } else {
@@ -171,7 +193,7 @@ export class PrinterDiagnostic {
         if (paths) {
           info.appPaths = {
             userData: paths.userData,
-            appPath: paths.appPath
+            docsPath: paths.documents
           };
         }
       }
@@ -303,6 +325,7 @@ export class PrinterDiagnostic {
               <tr>
                 <th>Name</th>
                 <th>Type</th>
+                <th>Port</th>
                 <th>Status</th>
                 <th>Default</th>
               </tr>
@@ -310,6 +333,7 @@ export class PrinterDiagnostic {
                 <tr>
                   <td>${printer.name}</td>
                   <td>${printer.isThermal ? 'Thermal' : 'Standard'}</td>
+                  <td>${printer.portName || 'N/A'}</td>
                   <td>${printer.status}</td>
                   <td>${printer.isDefault ? 'Yes' : 'No'}</td>
                 </tr>

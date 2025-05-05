@@ -320,6 +320,33 @@ const Factura: React.FC = () => {
     }
   };
 
+  // Imprimir factura
+  const handlePrint = async () => {
+    if (!state.selectedInvoice) {
+      showAlert('warning', 'No hay factura seleccionada para imprimir');
+      return;
+    }
+    try {
+      if (!facturaRef.current) {
+        throw new Error('Referencia de factura no disponible');
+      }
+      setIsSubmitting(true);
+      const htmlContent = facturaRef.current.outerHTML;
+      const mgr = InvoiceManager.getInstance();
+      await mgr.printInvoice(
+        state.selectedInvoice,
+        htmlContent,
+        { silent: true, copies: 1 }
+      );
+      showAlert('success', 'Factura impresa correctamente');
+    } catch (error) {
+      console.error('Error al imprimir factura:', error);
+      showAlert('error', `Error al imprimir: ${error instanceof Error ? error.message : 'Error desconocido'}`);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
   // Abrir carpeta de PDFs
   const handleOpenPdfFolder = async () => {
     try {

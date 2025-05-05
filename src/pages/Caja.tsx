@@ -172,6 +172,50 @@ const Caja: React.FC = () => {
   };
 
   // Verificar estado de la impresora térmica
+  const checkThermalPrinter = async () => {
+    try {
+      if (!window.api?.getPrinters) {
+        setPrinterStatus({ available: false, message: 'API de impresión no disponible' });
+        return;
+      }
+      if (!settings.impresora_termica) {
+        setPrinterStatus({ available: false, message: 'No hay impresora configurada' });
+        return;
+      }
+      const printers = await window.api.getPrinters();
+      const found = printers.find(p => p.name === settings.impresora_termica);
+      if (!found) {
+        setPrinterStatus({ available: false, message: 'Impresora configurada no disponible' });
+        return;
+      }
+      setPrinterStatus({ available: true, printerName: found.name });
+    } catch (err) {
+      console.error(err);
+      setPrinterStatus({ available: false, message: 'Error comprobando impresora' });
+    }
+  };
+
+  // Prueba de impresora
+  const handleTestPrinter = async () => {
+    if (!printerStatus.available || !window.api?.testPrinter) {
+      showAlert({ type: 'warning', message: 'No hay impresora disponible para prueba' });
+      return;
+    }
+    setIsSubmitting(true);
+    try {
+      const res = await window.api.testPrinter(printerStatus.printerName!);
+      if (res.success) {
+        showAlert({ type: 'success', message: 'Prueba de impresora enviada' });
+      } else {
+        throw new Error(res.error || 'Error desconocido');
+      }
+    } catch (err) {
+      console.error(err);
+      showAlert({ type: 'error', message: `Error al probar impresora: ${(err as Error).message}` });
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
 
   // Mostrar diálogo de confirmación
   const showConfirmDialog = (title: string, message: string, onConfirm: () => void, type: 'warning' | 'danger' | 'info' = 'warning') => {
@@ -392,6 +436,25 @@ const Caja: React.FC = () => {
     setPreviewMode(true);
   };
 
+  // Imprimir factura
+  const handlePrint = async () => {
+    if (!previewSale || !facturaRef.current) {
+      showAlert({ type: 'warning', message: 'No hay factura para imprimir' });
+      return;
+    }
+    setIsSubmitting(true);
+    try {
+      const html = facturaRef.current.outerHTML;
+      await invoiceManager.printInvoice(previewSale, html, { silent: true, copies: 1 });
+      showAlert({ type: 'success', message: 'Factura impresa correctamente' });
+    } catch (err) {
+      console.error(err);
+      showAlert({ type: 'error', message: `Error al imprimir: ${(err as Error).message}` });
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
   // Procesar venta
   const processSale = async () => {
     if (cart.length === 0) {
@@ -516,7 +579,11 @@ const Caja: React.FC = () => {
             }))
           });
 
-          // Imprimir si está habilitado
+          // Imprimir tras venta si aplica
+          if (printAfterSale && previewSale) {
+            try { await handlePrint(); }
+            catch { showAlert({ type: 'warning', message: 'Venta ok, pero error al imprimir' }); }
+          }
 
           // Actualizar stock
           setTimeout(() => fetchProducts(), 1000);
@@ -535,7 +602,10 @@ const Caja: React.FC = () => {
     );
   };
 
-  // Test thermal printer
+  // Al montar o cambiar configuración
+  useEffect(() => {
+    checkThermalPrinter();
+  }, [settings]);
 
   // Regresar al home
   const handleGoBack = () => {

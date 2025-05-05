@@ -11,16 +11,16 @@ const require = createRequire(import.meta.url);
 
 // Import database functions from your module
 import {
-  initializeDatabase, 
-  setupIpcHandlers, 
-  closeDB 
+  initializeDatabase,
+  setupIpcHandlers,
+  closeDB
 } from './src/database/index.js';
 
 // Import printing functions
-import { 
-  printWithThermalPrinter, 
-  getPrinters, 
-  savePdf      
+import {
+  printWithThermalPrinter,
+  getPrinters,
+  savePdf
 } from './src/printing/thermal-printer.js';
 
 // Set up directory paths
@@ -118,14 +118,14 @@ ipcMain.handle('openComponentWindow', async (event, componentName) => {
       minHeight: 600,
       frame: false,
       show: false,
-      webPreferences: {       
+      webPreferences: {
         preload: join(__dirname, 'preload.cjs'),
         nodeIntegration: false,
         contextIsolation: true,
         sandbox: false
       },
-    icon: join(__dirname, 'assets', 'images', 'icons', 'logo.ico')
-  });
+      icon: join(__dirname, 'assets', 'images', 'icons', 'logo.ico')
+    });
     // Remove window from cache when closed
     componentWindow.on('closed', () => {
       windowCache.delete(componentName);
@@ -191,7 +191,7 @@ ipcMain.on('broadcast-sync-event', (event, syncEvent) => {
   // Get all windows except sender
   const allWindows = BrowserWindow.getAllWindows();
   const sender = BrowserWindow.fromWebContents(event.sender);
-  
+
   // Send to all other windows
   allWindows.forEach(window => {
     if (window !== sender && !window.isDestroyed()) {
@@ -332,15 +332,28 @@ async function openCashDrawer(printerName) {
 // =====================================================
 function setupAllHandlers(ipcMain, app) {
   const safeRegister = (channel, handler) => {
-    try { ipcMain.removeHandler(channel) } catch {}
+    try { ipcMain.removeHandler(channel) } catch { }
     ipcMain.handle(channel, handler);
     console.log(`Registrado manejador para ${channel}`);
   };
 
-  // Obtener lista de impresoras (mejorado con USB/Serial)
+  // Get list of printers
   safeRegister('get-printers', async () => {
-    return await getPrinters();
+    console.log('Handling get-printers request');
+    try {
+      const printers = await getPrinters();
+      console.log(`Detected ${printers.printers.length} printers`);
+      return printers;
+    } catch (error) {
+      console.error('Error getting printers:', error);
+      return {
+        success: false,
+        printers: [],
+        error: error.message || 'Unknown error getting printers'
+      };
+    }
   });
+
 
   // Impresión (térmica o estándar según el destino)
   safeRegister('print', async (_, options) => {
@@ -379,59 +392,130 @@ function setupAllHandlers(ipcMain, app) {
   });
 
   // Prueba de conectividad de impresora
-  safeRegister('test-printer', async (_, printerName) => {
-    console.log(`Probando impresora: ${printerName || 'Predeterminada'}`);
-    try {
-      const testHTML = `
-        <!DOCTYPE html>
-        <html>
-        <head>
-          <meta charset="UTF-8">
-          <title>Prueba de Impresora</title>
-          <style>
-            @page { margin: 0; size: 80mm auto; }
-            body {
-              font-family: Arial, sans-serif;
-              text-align: center;
-              padding: 10mm;
-              width: 72mm;
-              margin: 0 auto;
-            }
-            .title {
-              font-size: 14pt;
-              font-weight: bold;
-              margin-bottom: 5mm;
-            }
-            .content { font-size: 10pt; margin-bottom: 5mm; }
-            .footer {
-              margin-top: 10mm;
-              font-size: 8pt;
-              border-top: 1px dashed #000;
-              padding-top: 2mm;
-            }
-          </style>
-        </head>
-        <body>
-          <div class="title">PÁGINA DE PRUEBA</div>
-          <div class="content">
-            <p>Prueba de impresora: ${printerName || 'Predeterminada'}</p>
-            <p>Fecha: ${new Date().toLocaleString()}</p>
-          </div>
-          <div class="footer">WilPOS - Sistema de Punto de Venta</div>
-        </body>
-        </html>
-      `;
-      return await printWithThermalPrinter({
-        html: testHTML,
-        printerName,
-        silent: true,
-        options: { thermalPrinter: true }
-      });
-    } catch (error) {
-      console.error('Error probando impresora:', error);
-      return { success: false, error: `Error probando impresora: ${error.message || 'Error desconocido'}` };
-    }
-  });
+  function setupAllHandlers(ipcMain, app) {
+    const safeRegister = (channel, handler) => {
+      try { ipcMain.removeHandler(channel) } catch { }
+      ipcMain.handle(channel, handler);
+      console.log(`Registered handler for ${channel}`);
+    };
+
+    // Get list of printers
+    safeRegister('get-printers', async () => {
+      return await getPrinters();
+    });
+
+    // Print handler
+    safeRegister('print', async (_, options) => {
+      console.log(`Print request received for: ${options.printerName || 'Default printer'}`);
+      try {
+        return await printWithThermalPrinter(options);
+      } catch (error) {
+        console.error('Print error:', error);
+        return { success: false, error: error.message || 'Unknown printing error' };
+      }
+    });
+
+    // Save as PDF handler
+    safeRegister('save-pdf', async (_, options) => {
+      try {
+        return await savePdf(options);
+      } catch (error) {
+        console.error('Save PDF error:', error);
+        return { success: false, error: error.message || 'Unknown PDF error' };
+      }
+    });
+
+    // Get default PDF path handler
+    safeRegister('get-pdf-path', async () => {
+      const dir = path.join(app.getPath('documents'), 'WilPOS', 'Facturas');
+      await fs.ensureDir(dir);
+      return dir;
+    });
+
+    // Test printer handler
+    safeRegister('test-printer', async (_, printerName) => {
+      console.log(`Testing printer: ${printerName || 'Default'}`);
+      try {
+        if (!printerName) {
+          throw new Error('Printer name is required');
+        }
+        
+        // Get list of available printers to verify printer exists
+        const printersResult = await getPrinters();
+        if (!printersResult.success) {
+          throw new Error('Failed to get printer list');
+        }
+        
+        const printerExists = printersResult.printers.some(p => p.name === printerName);
+        if (!printerExists) {
+          console.warn(`Printer "${printerName}" not found in system printers`);
+          // Continue anyway - the printer might still work
+        }
+        
+        const testHTML = `
+          <!DOCTYPE html>
+          <html>
+          <head>
+            <meta charset="UTF-8">
+            <title>Printer Test</title>
+            <style>
+              @page { margin: 0; size: 80mm auto; }
+              body {
+                font-family: Arial, sans-serif;
+                text-align: center;
+                padding: 10mm;
+                width: 72mm;
+                margin: 0 auto;
+              }
+              .title {
+                font-size: 14pt;
+                font-weight: bold;
+                margin-bottom: 5mm;
+              }
+              .content { font-size: 10pt; margin-bottom: 5mm; }
+              .footer {
+                margin-top: 10mm;
+                font-size: 8pt;
+                border-top: 1px dashed #000;
+                padding-top: 2mm;
+              }
+            </style>
+          </head>
+          <body>
+            <div class="title">TEST PAGE</div>
+            <div class="content">
+              <p>Printer test: ${printerName || 'Default'}</p>
+              <p>Date: ${new Date().toLocaleString()}</p>
+            </div>
+            <div class="footer">WilPOS - Point of Sale System</div>
+          </body>
+          </html>
+        `;
+        return await printWithThermalPrinter({
+          html: testHTML,
+          printerName,
+          silent: true,
+          options: { thermalPrinter: true }
+        });
+      } catch (error) {
+        console.error('Test printer error:', error);
+        return { success: false, error: `Test printer error: ${error.message || 'Unknown error'}` };
+      }
+    });
+
+    // Open folder handler
+    safeRegister('openFolder', async (_, folderPath) => {
+      try {
+        await fs.ensureDir(folderPath);
+        await shell.openPath(folderPath);
+        return true;
+      } catch (error) {
+        console.error('Error opening folder:', error);
+        return false;
+      }
+    });
+  }
+
 
   // Abrir carpeta en el sistema
   safeRegister('openFolder', async (_, folderPath) => {

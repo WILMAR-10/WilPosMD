@@ -10,6 +10,7 @@ export enum PrinterType {
 // Define interface for printer devices
 export interface Printer {
   name: string;
+  portName?: string;
   description?: string;
   status?: number;
   isDefault?: boolean;

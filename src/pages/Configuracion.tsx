@@ -12,6 +12,7 @@ import { useSettings, Settings as SettingsType } from '../services/DatabaseServi
 import ConfirmDialog from '../components/ConfirmDialog';
 import ProtectedRoute from '../components/ProtectedRoute';
 import Unauthorized from '../components/Unauthorized';
+import PrinterDiagnostic from '../utils/PrinterDiagnostic';
 
 type AlertType = 'success' | 'warning' | 'error' | 'info';
 
@@ -58,6 +59,13 @@ const Configuracion: React.FC = () => {
     type: 'warning' as 'warning' | 'danger' | 'info'
   });
 
+  // Add printer list state
+  const [printers, setPrinters] = useState<Array<{
+    name: string;
+    isDefault?: boolean;
+    isThermal?: boolean;
+  }>>([]);
+
   // Check user permissions
   const canViewSettings = hasPermission('configuracion', 'ver');
   const canEditSettings = hasPermission('configuracion', 'editar');
@@ -96,12 +104,25 @@ const Configuracion: React.FC = () => {
     loadConfig();
   }, [settings]);
 
-
   // Cuando cambie la pestaña y sea 'facturacion', refresca la lista
   useEffect(() => {
-    if (activeTab === 'facturacion') {
-      
-    }
+    const loadPrinters = async () => {
+      try {
+        if (activeTab !== 'facturacion') return;
+        const api = window.printerApi;
+        if (!api) throw new Error('Printer API not available');
+        const result = await api.getPrinters();
+        if (result.success) setPrinters(result.printers || []);
+        else throw new Error(result.error || 'Unknown error loading printers');
+      } catch (error) {
+        console.error('Error loading printers:', error);
+        setAlert({
+          type: 'error',
+          message: `Error al cargar impresoras: ${error instanceof Error ? error.message : 'Error desconocido'}`
+        });
+      }
+    };
+    loadPrinters();
   }, [activeTab]);
 
   // Manejar cambios en el formulario
@@ -289,6 +310,44 @@ const Configuracion: React.FC = () => {
       });
     }
   };
+
+  // Function to test the selected printer
+  const testSelectedPrinter = async () => {
+    try {
+      const api = window.printerApi;
+      if (!api?.testPrinter) throw new Error('Printer API or test function not available');
+      const result = await api.testPrinter(formData.impresora_termica);
+      if (result.success) {
+        setAlert({ type: 'success', message: 'Prueba de impresora enviada correctamente. Revise la impresora.' });
+      } else {
+        throw new Error(result.error || 'Unknown error testing printer');
+      }
+    } catch (error) {
+      console.error('Error testing printer:', error);
+      setAlert({
+        type: 'error',
+        message: `Error al probar impresora: ${error instanceof Error ? error.message : 'Error desconocido'}`
+      });
+    }
+  };
+
+  // Handler para diagnóstico completo
+  const handleRunDiagnostic = useCallback(async () => {
+    try {
+      const diag = new PrinterDiagnostic();
+      const result = await diag.runFullDiagnostic();
+      console.log('Diagnostic result:', result);
+      setAlert({
+        type: result.status === 'success' ? 'success'
+          : result.status === 'warning' ? 'warning'
+          : 'error',
+        message: result.message
+      });
+    } catch (error) {
+      console.error('Error running diagnostic:', error);
+      setAlert({ type: 'error', message: 'Error al ejecutar diagnóstico' });
+    }
+  }, []);
 
   // Mostrar diálogo de confirmación
   const showConfirmDialog = (title: string, message: string, onConfirm: () => void, type: 'warning' | 'danger' | 'info' = 'warning') => {
@@ -601,11 +660,125 @@ const Configuracion: React.FC = () => {
             <div className="space-y-6">
               <h2 className="text-lg font-medium text-gray-800">Configuración de Impresora</h2>
 
-              {/* Selector de impresora */}
+              {/* Printer selection */}
+              <div>
+                <label htmlFor="impresora_termica" className="block text-sm font-medium text-gray-700 mb-1">
+                  Impresora Térmica
+                </label>
+                <div className="flex space-x-2">
+                  <select
+                    id="impresora_termica"
+                    name="impresora_termica"
+                    className="flex-1 p-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    value={formData.impresora_termica || ''}
+                    onChange={handleChange}
+                    disabled={!canEditSettings}
+                  >
+                    <option value="">-- Seleccionar impresora --</option>
+                    {printers.map((printer, i) => (
+                      <option key={i} value={printer.name}>
+                        {printer.name} {printer.isDefault ? '(Default)' : ''} {printer.isThermal ? '(Térmica)' : ''}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    onClick={testSelectedPrinter}
+                    disabled={!formData.impresora_termica || !canEditSettings}
+                    className={`px-4 py-2 rounded-lg ${!formData.impresora_termica || !canEditSettings
+                        ? 'bg-gray-200 text-gray-500 cursor-not-allowed'
+                        : 'bg-blue-600 text-white hover:bg-blue-700'
+                      }`}
+                  >
+                    Probar
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleRunDiagnostic}
+                    disabled={!canEditSettings}
+                    className={`px-4 py-2 rounded-lg ${!canEditSettings
+                        ? 'bg-gray-200 text-gray-500 cursor-not-allowed'
+                        : 'bg-green-600 text-white hover:bg-green-700'
+                      }`}
+                  >
+                    Diagnóstico
+                  </button>
+                </div>
+                <p className="text-sm text-gray-500 mt-1">
+                  Las impresoras marcadas como (Térmica) serán tratadas como impresoras de recibos.
+                </p>
+              </div>
 
-              {/* Botones de prueba */}
+              {/* Printer type */}
+              <div>
+                <label htmlFor="tipo_impresora" className="block text-sm font-medium text-gray-700 mb-1">
+                  Tipo de Impresora
+                </label>
+                <select
+                  id="tipo_impresora"
+                  name="tipo_impresora"
+                  className="w-full p-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  value={formData.tipo_impresora}
+                  onChange={handleChange}
+                  disabled={!canEditSettings}
+                >
+                  <option value="normal">Impresora Normal</option>
+                  <option value="termica">Impresora Térmica 80mm</option>
+                  <option value="termica58">Impresora Térmica 58mm</option>
+                </select>
+                <p className="text-sm text-gray-500 mt-1">
+                  Seleccione el tipo de impresora que utilizará para la facturación.
+                </p>
+              </div>
 
-              {/* Mensaje de resultado */}
+              {/* PDF saving options */}
+              <div className="border-t pt-4">
+                <div className="flex items-center justify-between mb-2">
+                  <label htmlFor="guardar_pdf" className="text-sm font-medium text-gray-700">
+                    Guardar copia en PDF
+                  </label>
+                  <div className="relative inline-block w-10 mr-2 align-middle select-none">
+                    <input
+                      type="checkbox"
+                      id="guardar_pdf"
+                      name="guardar_pdf"
+                      className="sr-only"
+                      checked={formData.guardar_pdf}
+                      onChange={(e) => setFormData({ ...formData, guardar_pdf: e.target.checked })}
+                      disabled={!canEditSettings}
+                    />
+                    <div className={`block w-10 h-6 rounded-full ${formData.guardar_pdf ? 'bg-blue-600' : 'bg-gray-300'} transition`}></div>
+                    <div className={`absolute left-1 top-1 bg-white w-4 h-4 rounded-full transition-transform ${formData.guardar_pdf ? 'transform translate-x-4' : ''}`}></div>
+                  </div>
+                </div>
+
+                {formData.guardar_pdf && (
+                  <div className="mt-2">
+                    <label htmlFor="ruta_pdf" className="block text-sm font-medium text-gray-700 mb-1">
+                      Carpeta para facturas PDF
+                    </label>
+                    <div className="flex space-x-2">
+                      <input
+                        type="text"
+                        id="ruta_pdf"
+                        name="ruta_pdf"
+                        className="flex-1 p-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        value={formData.ruta_pdf || ''}
+                        onChange={handleChange}
+                        disabled={!canEditSettings}
+                        placeholder="Carpeta para guardar facturas PDF"
+                      />
+                      <button
+                        type="button"
+                        onClick={handleOpenFolder}
+                        className="px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700"
+                      >
+                        <Folder className="h-4 w-4" />
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
 
             </div>
           </div>

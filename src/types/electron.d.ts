@@ -5,7 +5,7 @@ import {
   DailyReport, Expense, SaleDetail
 } from '../services/DatabaseService';
 
-import {PrintOptions, PrintInvoiceOptions} from './printer';
+import {PrintOptions, PrintInvoiceOptions, SavePdfOptions, SavePdfResult, PrintResult, Printer} from './printer';
 
 interface Versions {
   node: () => string;
@@ -35,45 +35,25 @@ interface SalesResponse {
   total: number;
 }
 
-
-
-interface SavePdfOptions {
-  html: string;
-  path: string;
-  options?: {
-    printBackground?: boolean;
-    margins?: {
-      top?: number;
-      bottom?: number;
-      left?: number;
-      right?: number;
-    };
-    pageSize?: string;
-  };
+// Add these shared printer interfaces
+interface ElectronPrinting {
+  getPrinters: () => Promise<Array<{
+    name: string;
+    isDefault?: boolean;
+    description?: string;
+    status?: number;
+    isThermal?: boolean;
+  }>>;
 }
 
-interface PrintInvoiceResult {
-  success: boolean;
-  error?: string;
-  needManualPrint?: boolean;
-}
-
-interface SavePdfResult {
-  success: boolean;
-  path?: string;
-  originalPath?: string;
-  message?: string;
-  error?: string;
-  errorDetail?: string;
-}
-
-interface Printer {
-  isThermal: boolean;
-  name: string;
-  description?: string;
-  status?: number;
-  isDefault?: boolean;
-  options?: Record<string, any>;
+interface ElectronPrinter {
+  getPrinters: () => Promise<Array<{
+    name: string;
+    description?: string;
+    isDefault?: boolean;
+    isThermal?: boolean;
+  }>>;
+  print: (options: PrintOptions) => Promise<{ success: boolean; error?: string }>;
 }
 
 interface AppPaths {
@@ -83,11 +63,7 @@ interface AppPaths {
   temp: string;
   exe: string;
   appData: string;
-}
-
-interface PrintResult {
-  success: boolean;
-  error?: string;
+  appPath: string;
 }
 
 interface CancelSaleResult {
@@ -134,48 +110,6 @@ interface SyncEvent {
   type: string;
   data?: any;
   timestamp: number;
-}
-
-interface ElectronPrinting {
-  getPrinters: () => Promise<Array<{
-    name: string;
-    isDefault?: boolean;
-    description?: string;
-    status?: number;
-    isThermal?: boolean;
-  }>>;
-  // Add any other methods that electronPrinting may have
-}
-
-interface ElectronPrinter {
-  getPrinters: () => Promise<Array<{
-    name: string;
-    description?: string;
-    isDefault?: boolean;
-    isThermal?: boolean;
-  }>>;
-  print: (options: PrintOptions) => Promise<{ success: boolean; error?: string }>;
-}
-
-export enum PrinterType {
-  STANDARD = 'normal',
-  THERMAL_80MM = 'termica',
-  THERMAL_58MM = 'termica58'
-}
-
-
-export interface SavePdfOptions {
-  directory: string;
-  filename?: string;
-  overwrite?: boolean;
-}
-
-export interface PrinterInfo {
-  name: string;
-  description?: string;
-  isDefault?: boolean;
-  isThermal?: boolean;
-  status?: number; // added optional status
 }
 
 declare global {
@@ -287,7 +221,7 @@ declare global {
       // PDF and printer methods
       getPDFPath: () => Promise<string>;
       getPrinters: () => Promise<Printer[]>;
-      printInvoice: (options: PrintInvoiceOptions) => Promise<PrintInvoiceResult>;
+      printInvoice: (options: PrintInvoiceOptions) => Promise<PrintResult>;
       savePdf: (options: SavePdfOptions) => Promise<SavePdfResult>;
 
       getAppPaths: () => Promise<AppPaths>;
@@ -308,18 +242,15 @@ declare global {
       
       print?: (options: PrintOptions) => Promise<PrintResult>;
       printRaw?: (text: string, printerName?: string) => Promise<PrintResult>;
-      printInvoice?: (options: any) => Promise<PrintResult>;
       testPrinter?: (printerName?: string) => Promise<PrintResult>;
-      
-
     };
     printerApi: {
-
-      getPrinters: () => Promise<{ success: boolean; printers: PrinterInfo[]; error?: string }>;
+      getPrinters: () => Promise<{ success: boolean; printers: Printer[]; error?: string }>;
       print: (opts: PrintOptions) => Promise<PrintResult>;
       savePdf: (opts: SavePdfOptions) => Promise<SavePdfResult>;
       getPdfPath?: () => Promise<string | null>;
       printRaw?: (texto: string, printerName?: string) => Promise<PrintResult>;
+      testPrinter?: (printerName?: string) => Promise<PrintResult>;
     };
     electron?: {
       app: {

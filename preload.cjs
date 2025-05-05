@@ -8,8 +8,8 @@ const wrapApiMethod = (method, methodName) => {
       return await method(...args);
     } catch (error) {
       console.error(`Error en ${methodName}:`, error);
-      return { 
-        success: false, 
+      return {
+        success: false,
         error: error.message || `Error desconocido en ${methodName}`
       };
     }
@@ -29,16 +29,16 @@ contextBridge.exposeInMainWorld('api', {
   minimize: () => ipcRenderer.invoke('minimize'),
   maximize: () => ipcRenderer.invoke('maximize'),
   close: () => ipcRenderer.invoke('close'),
-  
+
   // Database initialization
   initializeDatabase: () => ipcRenderer.invoke('initialize-database'),
-  
+
   // Products handlers
   getProducts: () => ipcRenderer.invoke('productos:obtener'),
   addProduct: (product) => ipcRenderer.invoke('productos:insertar', product),
   updateProduct: (id, product) => ipcRenderer.invoke('productos:actualizar', id, product),
   deleteProduct: (id) => ipcRenderer.invoke('productos:eliminar', id),
-  
+
   // Users handlers
   getUsers: () => ipcRenderer.invoke('usuarios:obtener'),
   addUser: (user) => ipcRenderer.invoke('usuarios:insertar', user),
@@ -50,50 +50,50 @@ contextBridge.exposeInMainWorld('api', {
   addCategory: (category) => ipcRenderer.invoke('categorias:insertar', category),
   updateCategory: (id, category) => ipcRenderer.invoke('categorias:actualizar', id, category),
   deleteCategory: (id) => ipcRenderer.invoke('categorias:eliminar', id),
-  
+
   // Customers handlers
   getCustomers: () => ipcRenderer.invoke('clientes:obtener'),
   addCustomer: (customer) => ipcRenderer.invoke('clientes:insertar', customer),
   updateCustomer: (id, customer) => ipcRenderer.invoke('clientes:actualizar', id, customer),
   deleteCustomer: (id) => ipcRenderer.invoke('clientes:eliminar', id),
-  
+
   // Sales handlers
   createSale: (sale, details) => ipcRenderer.invoke('ventas:insertar', sale, details),
   getSales: (filters) => ipcRenderer.invoke('ventas:obtener', filters),
   getSaleDetails: (id) => ipcRenderer.invoke('ventas:obtenerPorId', id),
   cancelSale: (id) => ipcRenderer.invoke('cancelSale', id),
-  
+
   // Invoice handlers
   generateInvoice: (saleId) => ipcRenderer.invoke('facturas:generar', saleId),
   getInvoice: (saleId) => ipcRenderer.invoke('facturas:obtener', saleId),
-  
+
   // Report handlers
   getDailySalesReport: (date) => ipcRenderer.invoke('reportes:ventasDiarias', date),
   getMonthlyReport: (month, year) => ipcRenderer.invoke('reportes:ventasMensuales', month, year),
   getSalesReport: (startDate, endDate) => ipcRenderer.invoke('reportes:ventas', startDate, endDate),
   getTopProducts: (startDate, endDate, limit = 10) => ipcRenderer.invoke('reportes:topProductos', startDate, endDate, limit),
   getDailyReports: (params) => ipcRenderer.invoke('resumen:obtenerPorFechas', params.startDate, params.endDate),
-  
+
   // Settings handlers
   getSettings: () => ipcRenderer.invoke('configuracion:obtener'),
   saveSettings: (settings) => ipcRenderer.invoke('configuracion:actualizar', settings),
-  
+
   // Authentication handlers
   login: (credentials) => ipcRenderer.invoke('login', credentials),
   logout: () => ipcRenderer.invoke('logout'),
-  
+
   // File/folder management
   openFolder: wrapApiMethod(async (folderPath) => {
     return await ipcRenderer.invoke('openFolder', folderPath);
   }, 'openFolder'),
-  
+
   // Window management
   openComponentWindow: (component) => ipcRenderer.invoke('openComponentWindow', component),
   identifyWindow: () => ipcRenderer.invoke('identifyWindow'),
 
   // App paths
   getAppPaths: () => ipcRenderer.invoke('getAppPaths'),
-  
+
   // Sync events between windows
   registerSyncListener: () => {
     ipcRenderer.on('sync-event', (_, event) => {
@@ -101,11 +101,11 @@ contextBridge.exposeInMainWorld('api', {
       window.dispatchEvent(syncEvent);
     });
   },
-  
+
   unregisterSyncListener: () => {
     ipcRenderer.removeAllListeners('sync-event');
   },
-  
+
   broadcastSyncEvent: (event) => {
     ipcRenderer.send('broadcast-sync-event', event);
   },
@@ -126,48 +126,62 @@ contextBridge.exposeInMainWorld('electron', {
 contextBridge.exposeInMainWorld('printerApi', {
   getPrinters: async () => {
     try {
+      console.log('printerApi.getPrinters called from renderer');
       const result = await ipcRenderer.invoke('get-printers');
-      if (result && typeof result === 'object') return result;
-      console.warn('Invalid printers response, returning fallback');
+      console.log('getPrinters result:', result);
+
+      if (!result || typeof result !== 'object') {
+        console.warn('Invalid result from get-printers', result);
+        return {
+          success: false,
+          error: 'Invalid response from printer API',
+          printers: []
+        };
+      }
+
       return {
-        success: true,
-        printers: [
-          { name: 'Microsoft Print to PDF', isDefault: true, isThermal: false },
-          { name: 'POS-80',             isDefault: false, isThermal: true  }
-        ]
+        success: !!result.success,
+        printers: Array.isArray(result.printers) ? result.printers : [],
+        error: result.error || undefined
       };
     } catch (error) {
       console.error('Error in getPrinters:', error);
       return {
-        success: true,
-        error:   error.message || 'Unknown error',
-        printers:[
-          { name: 'Microsoft Print to PDF', isDefault: true, isThermal: false }
-        ]
+        success: false,
+        error: error.message || 'Unknown error',
+        printers: []
       };
     }
   },
-  // Standard printer function for regular printing
+
   print: (options) => {
     try {
+      console.log('printerApi.print called from renderer', options);
       return ipcRenderer.invoke('print', options)
-        .catch(err => ({ success: false, error: err.message || 'Unknown error' }));
+        .catch(err => {
+          console.error('Error in print invoke:', err);
+          return { success: false, error: err.message || 'Unknown error' };
+        });
     } catch (error) {
-      console.error('Print error:', error);
+      console.error('Error in print:', error);
       return Promise.resolve({ success: false, error: error.message || 'Unknown error' });
     }
   },
-  // Function for ESC/POS commands to thermal printers
-  sendRawCommandsToPrinter: (commands, printerName) => {
+
+  testPrinter: (printerName) => {
     try {
-      return ipcRenderer.invoke('print-raw', { texto: commands, printerName })
-        .catch(err => ({ success: false, error: err.message || 'Unknown error' }));
+      console.log('printerApi.testPrinter called from renderer', printerName);
+      return ipcRenderer.invoke('test-printer', printerName)
+        .catch(err => {
+          console.error('Error in testPrinter invoke:', err);
+          return { success: false, error: err.message || 'Unknown error' };
+        });
     } catch (error) {
-      console.error('Raw printing error:', error);
+      console.error('Error in testPrinter:', error);
       return Promise.resolve({ success: false, error: error.message || 'Unknown error' });
     }
   },
-  // PDF-related functions
+
   savePdf: (options) => {
     try {
       return ipcRenderer.invoke('save-pdf', options)
@@ -177,12 +191,23 @@ contextBridge.exposeInMainWorld('printerApi', {
       return Promise.resolve({ success: false, error: error.message || 'Unknown error' });
     }
   },
+
   getPdfPath: () => {
     try {
       return ipcRenderer.invoke('get-pdf-path').catch(() => null);
     } catch (error) {
       console.error('Get PDF path error:', error);
       return Promise.resolve(null);
+    }
+  },
+
+  printRaw: (text, printerName) => {
+    try {
+      return ipcRenderer.invoke('print-raw', { text, printerName })
+        .catch(err => ({ success: false, error: err.message || 'Unknown error' }));
+    } catch (error) {
+      console.error('Raw print error:', error);
+      return Promise.resolve({ success: false, error: error.message || 'Unknown error' });
     }
   }
 });
