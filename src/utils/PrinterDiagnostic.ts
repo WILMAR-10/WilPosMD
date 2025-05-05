@@ -1,263 +1,364 @@
-import { Settings } from "../services/DatabaseService"
-import ThermalPrintService from "../services/ThermalPrintService"
+// src/utils/PrinterDiagnostic.ts
+import ThermalPrintService from '../services/ThermalPrintService';
+
+export interface DiagnosticResult {
+  status: 'success' | 'warning' | 'error';
+  message: string;
+  details?: string[];
+  printers?: Array<{
+    name: string;
+    isDefault?: boolean;
+    isThermal?: boolean;
+    status?: string;
+  }>;
+  activePrinter?: string | null;
+  systemInfo?: Record<string, any>;
+}
 
 /**
- * Run a comprehensive printer diagnostic 
- * @returns Promise<{success: boolean, results: string[], errors: string[]}>
+ * Utility class for diagnosing printer issues
+ * Provides tools for testing and troubleshooting printer connections
  */
-export async function runPrinterDiagnostic(): Promise<{ success: boolean; results: string[]; errors: string[] }> {
-  const results: string[] = []
-  const errors: string[] = []
-
-  const addResult = (msg: string) => {
-    results.push(msg)
-    console.log(msg)
+export class PrinterDiagnostic {
+  private thermalPrintService: ThermalPrintService;
+  
+  constructor() {
+    this.thermalPrintService = ThermalPrintService.getInstance();
   }
-  const addError = (msg: string) => {
-    errors.push(msg)
-    console.error(`❌ ${msg}`)
-  }
-
-  addResult("=== STARTING PRINTER DIAGNOSTIC ===")
-  addResult(`Date and time: ${new Date().toLocaleString()}`)
-
-  try {
-    // 1. ThermalPrintService
-    addResult("🔍 Checking ThermalPrintService...")
-    const thermalService = ThermalPrintService.getInstance()
-    addResult("✅ ThermalPrintService initialized")
-
-    // 2. APIs availability
-    addResult("🔍 Checking available APIs...")
-    const hasMainApi                = !!window.api
-    const hasPrinterApi            = !!window.printerApi
-    const hasPrinterApiGetPrinters = !!window.printerApi?.getPrinters
-    const hasPrinterApiPrint       = !!window.printerApi?.print
-    addResult(`- window.api: ${hasMainApi ? '✅' : '❌'}`)
-    addResult(`- window.printerApi: ${hasPrinterApi ? '✅' : '❌'}`)
-    addResult(`- printerApi.getPrinters: ${hasPrinterApiGetPrinters ? '✅' : '❌'}`)
-    addResult(`- printerApi.print: ${hasPrinterApiPrint ? '✅' : '❌'}`)
-
-    if (!hasMainApi) addError("Main API not available")
-    if (!hasPrinterApi) addError("Printer API not available")
-
-    // 3. List printers
-    addResult("📋 Retrieving printer list...");
-    let printers: any[] = [];
+  
+  /**
+   * Run a complete diagnostic on the printing system
+   * Checks available printers, settings, and attempts test prints
+   */
+  public async runFullDiagnostic(): Promise<DiagnosticResult> {
     try {
-      const res = await thermalService.getAllPrinters();
-      printers = res.printers || [];
-
-      if (printers.length === 0) {
-        addResult("⚠️ No printers found through ThermalPrintService");
-        // fallback to direct window.printerApi
-        if (window.printerApi?.getPrinters) {
-          const directRes = await window.printerApi.getPrinters();
-          if (directRes?.printers?.length) {
-            printers = directRes.printers;
-            addResult("✅ Found printers through direct printerApi call");
-          }
-        }
+      // Check system environment
+      const systemInfo = await this.getSystemInfo();
+      
+      // Get all available printers
+      const printers = await this.thermalPrintService.getAvailablePrinters();
+      
+      if (!printers || printers.length === 0) {
+        return {
+          status: 'error',
+          message: 'No printers detected in the system',
+          systemInfo
+        };
       }
-
-      if (printers.length === 0) {
-        addResult("⚠️ No printers found through any method");
+      
+      // Get current printer status
+      const printerStatus = await this.thermalPrintService.checkPrinterStatus();
+      
+      // Transform printer info for output
+      const printerList = printers.map(printer => ({
+        name: printer.name,
+        isDefault: printer.isDefault,
+        isThermal: printer.isThermal,
+        status: printer.name === printerStatus.printerName ? 
+          (printerStatus.available ? 'Active' : 'Error') : 'Available'
+      }));
+      
+      // Determine overall status
+      let status: 'success' | 'warning' | 'error' = 'success';
+      let message = 'Printing system is working correctly';
+      const details: string[] = [];
+      
+      // Check if there are any thermal printers
+      const thermalPrinters = printers.filter(p => p.isThermal);
+      if (thermalPrinters.length === 0) {
+        status = 'warning';
+        message = 'No thermal printers detected';
+        details.push('System will use standard printers for receipt printing');
+      }
+      
+      // Check if active printer is available
+      if (!printerStatus.available) {
+        status = 'error';
+        message = printerStatus.message || 'Printer not available';
+        details.push('No working printer configured for receipts');
       } else {
-        addResult(`✅ Found ${printers.length} printers:`);
-        printers.forEach((p, i) => {
-          addResult(
-            `  ${i + 1}. ${p.name}` +
-            `${p.isDefault ? ' (Default)' : ''}` +
-            `${p.isThermal ? ' (Thermal)' : ''}`
-          );
-          if (p.description) addResult(`     Description: ${p.description}`);
-          if ((p as any).status) addResult(`     Status: ${(p as any).status}`);
-        });
-        const thermals = printers.filter(p => p.isThermal);
-        addResult(`   Thermal printers: ${thermals.length}`);
-
-        // detect potential thermal printers by name
-        const potentialThermals = printers.filter(p =>
-          !p.isThermal &&
-          /thermal|receipt|pos|58mm|80mm|escpos|tm-|epson/i.test(p.name)
-        );
-        if (potentialThermals.length > 0) {
-          addResult(`⚠️ Found ${potentialThermals.length} potential thermal printers not marked as such:`);
-          potentialThermals.forEach(p => addResult(`   - ${p.name}`));
-        }
+        details.push(`Active printer: ${printerStatus.printerName}`);
       }
-    } catch (e) {
-      addError(`Failed to get printers: ${e instanceof Error ? e.message : String(e)}`);
+      
+      return {
+        status,
+        message,
+        details,
+        printers: printerList,
+        activePrinter: printerStatus.printerName,
+        systemInfo
+      };
+    } catch (error) {
+      console.error('Error running printer diagnostic:', error);
+      return {
+        status: 'error',
+        message: 'Failed to run printer diagnostic',
+        details: [error instanceof Error ? error.message : 'Unknown error']
+      };
     }
-
-    // 4. Printer configuration
-    addResult("🔍 Checking configured printer in settings...");
+  }
+  
+  /**
+   * Test a specific printer
+   * @param printerName Name of printer to test
+   */
+  public async testPrinter(printerName?: string): Promise<DiagnosticResult> {
     try {
+      const targetPrinter = printerName || this.thermalPrintService.activePrinter;
+      
+      if (!targetPrinter) {
+        return {
+          status: 'error',
+          message: 'No printer specified or configured'
+        };
+      }
+      
+      // Try to print a test page
+      const result = await this.thermalPrintService.testPrinter(targetPrinter);
+      
+      if (result.success) {
+        return {
+          status: 'success',
+          message: `Test page sent to ${targetPrinter}`,
+          details: [result.message || 'Check printer for output']
+        };
+      } else {
+        return {
+          status: 'error',
+          message: `Failed to print to ${targetPrinter}`,
+          details: [result.error || 'Unknown error']
+        };
+      }
+    } catch (error) {
+      console.error('Error testing printer:', error);
+      return {
+        status: 'error',
+        message: 'Test failed with exception',
+        details: [error instanceof Error ? error.message : 'Unknown error']
+      };
+    }
+  }
+  
+  /**
+   * Get system environment information
+   * Collects information about OS, Electron, and app versions
+   */
+  public async getSystemInfo(): Promise<Record<string, any>> {
+    const info: Record<string, any> = {
+      timestamp: new Date().toISOString(),
+      platform: 'Unknown',
+      electronVersion: 'Unknown',
+      nodeVersion: 'Unknown',
+      appVersion: 'Unknown'
+    };
+    
+    try {
+      // Try to get versions from window.versions (from preload)
+      if (window.versions) {
+        info.electronVersion = window.versions.electron();
+        info.nodeVersion = window.versions.node();
+        info.chromeVersion = window.versions.chrome();
+      }
+      
+      // Try to detect platform from navigator
+      if (navigator.platform) {
+        info.platform = navigator.platform;
+      }
+      
+      // Try to get app settings
       if (window.api?.getSettings) {
-        const settings: Settings = await window.api.getSettings();
+        const settings = await window.api.getSettings();
         if (settings) {
-          addResult("✅ Settings loaded");
-          addResult(`- tipo_impresora: ${settings.tipo_impresora || 'normal'}`);
-          addResult(`- impresora_termica: ${settings.impresora_termica || 'Not configured'}`);
-          addResult(`- guardar_pdf: ${settings.guardar_pdf ? 'Yes' : 'No'}`);
-          addResult(`- ruta_pdf: ${settings.ruta_pdf || 'Not configured'}`);
-
-          if (settings.impresora_termica) {
-            const found = printers.find(p => p.name === settings.impresora_termica);
-            if (found) {
-              addResult("✅ Configured thermal printer is available");
-              addResult(`  - isThermal flag: ${found.isThermal ? 'Yes' : 'No'}`);
-              if (!found.isThermal) {
-                addResult("⚠️ WARNING: Printer is configured but not detected as thermal");
-              }
-            } else {
-              addError("Configured thermal printer not found in available printers list");
-              addResult("ℹ️ This may be due to differences in printer names");
-              const partialMatches = printers.filter(p =>
-                p.name.includes(settings.impresora_termica!) ||
-                settings.impresora_termica!.includes(p.name)
-              );
-              if (partialMatches.length > 0) {
-                addResult("Possible matches found:");
-                partialMatches.forEach(p => addResult(`  - ${p.name}`));
-              }
+          // Don't include sensitive info
+          info.appSettings = {
+            printerConfig: !!settings.impresora_termica,
+            printerType: settings.tipo_impresora,
+            hasPdfPath: !!settings.ruta_pdf
+          };
+        }
+      }
+      
+      return info;
+    } catch (error) {
+      console.error('Error getting system info:', error);
+      return {
+        ...info,
+        error: error instanceof Error ? error.message : 'Unknown error'
+      };
+    }
+  }
+  
+  /**
+   * Test opening cash drawer
+   * @param printerName Optional printer name
+   */
+  public async testCashDrawer(printerName?: string): Promise<DiagnosticResult> {
+    try {
+      const result = await this.thermalPrintService.openCashDrawer(printerName);
+      
+      if (result.success) {
+        return {
+          status: 'success',
+          message: 'Cash drawer command sent successfully',
+          details: ['Check if the cash drawer opened']
+        };
+      } else {
+        return {
+          status: 'error',
+          message: 'Failed to send cash drawer command',
+          details: [result.error || 'Printer may not support cash drawer control']
+        };
+      }
+    } catch (error) {
+      console.error('Error testing cash drawer:', error);
+      return {
+        status: 'error',
+        message: 'Cash drawer test failed with exception',
+        details: [error instanceof Error ? error.message : 'Unknown error']
+      };
+    }
+  }
+  
+  /**
+   * Create a detailed diagnostic report in HTML format
+   * Useful for support and troubleshooting
+   */
+  public async generateDiagnosticReport(): Promise<string> {
+    try {
+      const diagnosticResult = await this.runFullDiagnostic();
+      const timestamp = new Date().toLocaleString();
+      
+      return `
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <meta charset="UTF-8">
+          <title>WilPOS Printer Diagnostic Report</title>
+          <style>
+            body {
+              font-family: Arial, sans-serif;
+              max-width: 800px;
+              margin: 0 auto;
+              padding: 20px;
+              line-height: 1.5;
             }
-          } else {
-            addResult("ℹ️ No specific thermal printer configured in settings");
-          }
-        } else {
-          addError("Settings object is empty");
-        }
-      } else {
-        addError("Settings API not available");
-      }
-    } catch (e) {
-      addError(`Failed to load settings: ${e instanceof Error ? e.message : String(e)}`);
+            h1, h2 {
+              color: #333;
+              border-bottom: 1px solid #ddd;
+              padding-bottom: 5px;
+            }
+            .status {
+              padding: 10px;
+              margin: 10px 0;
+              border-radius: 5px;
+            }
+            .success {
+              background-color: #d4f7d4;
+              border: 1px solid #34c240;
+            }
+            .warning {
+              background-color: #fff4d4;
+              border: 1px solid #ffc107;
+            }
+            .error {
+              background-color: #ffd4d4;
+              border: 1px solid #ff3b30;
+            }
+            table {
+              width: 100%;
+              border-collapse: collapse;
+              margin: 20px 0;
+            }
+            th, td {
+              border: 1px solid #ddd;
+              padding: 8px;
+              text-align: left;
+            }
+            th {
+              background-color: #f2f2f2;
+            }
+            .footer {
+              margin-top: 40px;
+              font-size: 12px;
+              color: #666;
+              text-align: center;
+            }
+          </style>
+        </head>
+        <body>
+          <h1>WilPOS Printer Diagnostic Report</h1>
+          <p>Generated: ${timestamp}</p>
+          
+          <div class="status ${diagnosticResult.status}">
+            <h2>Diagnostic Result: ${diagnosticResult.status.toUpperCase()}</h2>
+            <p><strong>${diagnosticResult.message}</strong></p>
+            ${diagnosticResult.details ? `
+              <ul>
+                ${diagnosticResult.details.map(detail => `<li>${detail}</li>`).join('')}
+              </ul>
+            ` : ''}
+          </div>
+          
+          <h2>Printer Information</h2>
+          ${diagnosticResult.printers && diagnosticResult.printers.length > 0 ? `
+            <table>
+              <tr>
+                <th>Name</th>
+                <th>Type</th>
+                <th>Status</th>
+                <th>Default</th>
+              </tr>
+              ${diagnosticResult.printers.map(printer => `
+                <tr>
+                  <td>${printer.name}</td>
+                  <td>${printer.isThermal ? 'Thermal' : 'Standard'}</td>
+                  <td>${printer.status}</td>
+                  <td>${printer.isDefault ? 'Yes' : 'No'}</td>
+                </tr>
+              `).join('')}
+            </table>
+            <p>Active printer: ${diagnosticResult.activePrinter || 'None'}</p>
+          ` : '<p>No printers detected</p>'}
+          
+          <h2>System Information</h2>
+          ${diagnosticResult.systemInfo ? `
+            <table>
+              <tr>
+                <th>Property</th>
+                <th>Value</th>
+              </tr>
+              ${Object.entries(diagnosticResult.systemInfo).map(([key, value]) => `
+                <tr>
+                  <td>${key}</td>
+                  <td>${JSON.stringify(value)}</td>
+                </tr>
+              `).join('')}
+            </table>
+          ` : '<p>System information not available</p>'}
+          
+          <div class="footer">
+            <p>WilPOS - Point of Sale System</p>
+            <p>For support, please contact system administrator</p>
+          </div>
+        </body>
+        </html>
+      `;
+    } catch (error) {
+      console.error('Error generating diagnostic report:', error);
+      return `
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <title>Error Report</title>
+        </head>
+        <body>
+          <h1>Error Generating Diagnostic Report</h1>
+          <p>${error instanceof Error ? error.message : 'Unknown error'}</p>
+        </body>
+        </html>
+      `;
     }
-
-    // 5. Platform detection
-    addResult("🔍 Detecting platform...");
-    const platform = process.platform || navigator.platform;
-    const ua = navigator.userAgent;
-    addResult(`- Platform: ${platform}`);
-    addResult(`- User Agent: ${ua}`);
-    let detectedOS = "Unknown";
-    if (platform.includes('win') || ua.includes('Windows')) detectedOS = "Windows";
-    else if (platform.includes('mac') || ua.includes('Mac')) detectedOS = "macOS";
-    else if (platform.includes('linux') || ua.includes('Linux')) detectedOS = "Linux";
-    addResult(`- Detected OS: ${detectedOS}`);
-    if (detectedOS === "Windows") {
-      addResult("ℹ️ On Windows, check that printer drivers are installed correctly");
-      addResult("ℹ️ For ESC/POS printers, try installing 'Generic / Text Only' driver");
-    } else if (detectedOS === "Linux") {
-      addResult("ℹ️ On Linux, check CUPS configuration for proper printer setup");
-    }
-
-    // 6. Test printer connectivity
-    addResult("🔍 Checking thermal printer connectivity...");
-    try {
-      const status = await thermalService.checkPrinterStatus();
-      if (status.available) {
-        addResult(`✅ Thermal printer available: ${status.printerName}`);
-        addResult(`- Message: ${status.message}`);
-        addResult("🖨️ Attempting to send test print job...");
-        try {
-          const testResult = await thermalService.testPrinter();
-          if (testResult.success) {
-            addResult("✅ Test print successful!");
-          } else {
-            addError(`Test print failed: ${testResult.message || 'Unknown error'}`);
-          }
-        } catch (printError) {
-          addError(`Error during test print: ${printError instanceof Error ? printError.message : String(printError)}`);
-        }
-      } else {
-        addResult("⚠️ No thermal printer available");
-        addResult(`- Message: ${status.message}`);
-        addResult("🔍 Checking for node-thermal-printer availability...");
-        if (window.printerApi?.printRaw) {
-          addResult("✅ Raw printing API is available");
-        } else {
-          addError("Raw printing API not available");
-        }
-      }
-    } catch (e) {
-      addError(`Failed to check printer connectivity: ${e instanceof Error ? e.message : String(e)}`);
-    }
-
-    // 7. Check thermal printer implementation
-    addResult("🔍 Analyzing ThermalPrintService implementation...");
-    try {
-      const serviceImpl = thermalService.toString();
-      const hasEscPos = serviceImpl.includes('ESC/POS') || serviceImpl.includes('node-thermal-printer');
-      if (hasEscPos) {
-        addResult("✅ ESC/POS commands appear to be implemented");
-      } else {
-        addResult("ℹ️ No direct ESC/POS implementation found in ThermalPrintService");
-        addResult("   Printing might be using Electron's print API instead of direct commands");
-      }
-    } catch (e) {
-      addError(`Error analyzing implementation: ${e instanceof Error ? e.message : String(e)}`);
-    }
-
-    // 8. Check preload implementation
-    addResult("🔍 Checking preload implementation...");
-    if (window.printerApi?.printRaw) {
-      addResult("✅ Raw printing API is defined in preload");
-    } else {
-      addError("Raw printing API not defined in preload");
-      addResult("ℹ️ This is needed for direct ESC/POS command printing");
-    }
-
-    addResult("=== PRINTER DIAGNOSTIC COMPLETED ===")
-    return { success: errors.length === 0, results, errors }
-  } catch (error) {
-    addError(`Error during diagnostic: ${error instanceof Error ? error.message : String(error)}`)
-    addResult("=== PRINTER DIAGNOSTIC FAILED ===")
-    return { success: false, results, errors }
   }
 }
 
-/**
- * Run a direct ESC/POS test via raw printing API
- */
-export async function testDirectThermalPrinting(): Promise<{ success: boolean; results: string[]; errors: string[] }> {
-  const results: string[] = [];
-  const errors: string[] = [];
-
-  results.push("🖨️ Testing direct thermal printing...");
-  if (!window.printerApi?.printRaw) {
-    errors.push("Raw printing API not available");
-    return { success: false, results, errors };
-  }
-
-  let printerName = "";
-  if (window.api?.getSettings) {
-    const settings = await window.api.getSettings();
-    printerName = settings?.impresora_termica || "";
-  }
-  results.push(`Using printer: ${printerName || "Default"}`);
-
-  const escposTest =
-    "\x1B@" +         // init
-    "\x1Ba\x01" +     // center
-    "THERMAL PRINTER TEST\n\n" +
-    `Date: ${new Date().toLocaleString()}\n` +
-    `Printer: ${printerName || "Default"}\n\n` +
-    "\x1Bd\x01" +     // feed & cut
-    "\x1B@";          // reset
-
-  try {
-    const result = await window.printerApi.printRaw(escposTest, printerName);
-    if (result?.success) {
-      results.push("✅ Direct thermal printing test successful!");
-      return { success: true, results, errors };
-    } else {
-      errors.push(`Direct printing failed: ${result?.error || "Unknown error"}`);
-      return { success: false, results, errors };
-    }
-  } catch (err) {
-    errors.push(`Error in direct thermal printing test: ${err instanceof Error ? err.message : String(err)}`);
-    return { success: false, results, errors };
-  }
-}
+export default PrinterDiagnostic;

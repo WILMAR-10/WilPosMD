@@ -1,4 +1,5 @@
 // src/types/user.ts
+
 export type UserRole = 'admin' | 'cajero' | 'empleado';
 
 export interface User {

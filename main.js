@@ -378,6 +378,58 @@ function setupAllHandlers(ipcMain, app) {
     }
   });
 
+  // Impresión directa de comandos RAW para impresoras térmicas ESC/POS
+  safeRegister('printer:print-raw', async (_, commands, printerName) => {
+    console.log(`Recibida petición de impresión RAW para ${printerName}`);
+    console.log(`Tamaño comandos: ${commands.length} bytes`);
+    
+    try {
+      // Crear instancia de impresora térmica
+      const printer = new ThermalPrinter({
+        type: PrinterTypes.EPSON,
+        interface: `printer:${printerName}`,
+        driver: require('printer'),
+        options: {
+          timeout: 5000
+        },
+        characterSet: CharacterSet.PC850_MULTILINGUAL
+      });
+      
+      // Verificar conectividad
+      const isConnected = await printer.isPrinterConnected();
+      if (!isConnected) {
+        console.error(`La impresora ${printerName} no está conectada`);
+        return { 
+          success: false, 
+          error: `La impresora ${printerName} no está conectada` 
+        };
+      }
+      
+      // Enviar datos RAW directamente a la impresora
+      printer.write(Buffer.from(commands));
+      
+      // Ejecutar comando de impresión
+      await printer.execute();
+      
+      console.log(`Comandos RAW enviados exitosamente a ${printerName}`);
+      return { 
+        success: true, 
+        message: `Impresión enviada a ${printerName}` 
+      };
+    } catch (error) {
+      console.error('Error al imprimir comandos RAW:', error);
+      return { 
+        success: false, 
+        error: error.message || 'Error desconocido al imprimir'
+      };
+    }
+  });
+  
+  // Alias para compatibilidad con versiones anteriores (sin prefijo 'printer:')
+  safeRegister('print-raw', async (_, commands, printerName) => {
+    return ipcMain.handle('printer:print-raw', commands, printerName);
+  });
+
   // Prueba de conectividad de impresora
   safeRegister('test-printer', async (_, printerName) => {
     console.log(`Probando impresora: ${printerName || 'Predeterminada'}`);

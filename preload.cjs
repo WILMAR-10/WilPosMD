@@ -173,18 +173,25 @@ contextBridge.exposeInMainWorld('printerApi', {
       return Promise.resolve(null);
     }
   },
-  printRaw: (texto, printerName) => {
+  printRaw: (text, printerName) => {
     try {
-      console.log(`Sending raw ESC/POS commands to printer: ${printerName || 'Default'}`);
-      console.log(`Raw command length: ${texto.length} bytes`);
-      return ipcRenderer.invoke('print-raw', { texto, printerName })
-        .catch(err => {
-          console.error('Raw print error:', err);
-          return { success: false, error: err.message || 'Unknown error' };
-        });
+      return ipcRenderer.invoke('print-raw', { texto: text, printerName })
+        .catch(err => ({ success: false, error: err.message || 'Unknown error' }));
     } catch (error) {
       console.error('Print raw error:', error);
       return Promise.resolve({ success: false, error: error.message || 'Unknown error' });
     }
+  },
+  
+  // This was commented out in your code, but should be enabled if needed
+  print: opts => {
+    try {
+      return ipcRenderer.invoke('print', opts)
+        .catch(err => ({ success: false, error: err.message || 'Unknown error' }));
+    } catch (error) {
+      console.error('Print error:', error);
+      return Promise.resolve({ success: false, error: error.message || 'Unknown error' });
+    }
   }
+
 });

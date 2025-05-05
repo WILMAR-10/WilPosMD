@@ -5,6 +5,14 @@ import {
   DailyReport, Expense, SaleDetail
 } from '../services/DatabaseService';
 
+import {PrintOptions, PrintInvoiceOptions} from './printer';
+
+interface Versions {
+  node: () => string;
+  chrome: () => string;
+  electron: () => string;
+}
+
 interface FacturaState {
   invoices: PreviewSale[];
   selectedInvoice: PreviewSale | null;
@@ -27,18 +35,7 @@ interface SalesResponse {
   total: number;
 }
 
-interface PrintInvoiceOptions {
-  html: string;
-  printerName?: string;
-  silent?: boolean;
-  copies?: number;
-  options?: {
-    paperWidth?: string;
-    printSpeed?: string;
-    fontSize?: string;
-    [key: string]: any;
-    };
-}
+
 
 interface SavePdfOptions {
   html: string;
@@ -166,11 +163,6 @@ export enum PrinterType {
   THERMAL_58MM = 'termica58'
 }
 
-export interface PrintOptions {
-  printerName?: string;
-  silent?: boolean;
-  copies?: number;
-}
 
 export interface SavePdfOptions {
   directory: string;
@@ -188,12 +180,10 @@ export interface PrinterInfo {
 
 declare global {
   interface Window {
+    versions: Versions;
     electronPrinter: ElectronPrinter;
     electronPrinting?: ElectronPrinting;
     api?: {
-
-      getSettings?: () => Promise<any>;
-
       // Window controls
       openFolder: (folderPath: string) => Promise<boolean>;
       minimize: () => Promise<boolean>;
@@ -281,6 +271,7 @@ declare global {
       addInventoryMovement: (movement: InventoryMovement) => Promise<InventoryMovement>;
       
       // Settings
+      getSettings?: () => Promise<any>;
       getSettings: () => Promise<Settings>;
       saveSettings: (settings: Settings) => Promise<Settings>;
       
@@ -307,17 +298,28 @@ declare global {
       unregisterSyncListener: () => void,
       broadcastSyncEvent: (event: SyncEvent) => void,
       testPrinter: (printerName?: string) => Promise<PrintResult>,
+
+      ensureDir?: (folderPath: string) => Promise<{ success: boolean; error?: string }>;
+      sendMail?: (opts: {
+        subject: string;
+        body: string;
+        attachments?: string[];
+      }) => Promise<{ success: boolean; error?: string }>;
+      
+      print?: (options: PrintOptions) => Promise<PrintResult>;
+      printRaw?: (text: string, printerName?: string) => Promise<PrintResult>;
+      printInvoice?: (options: any) => Promise<PrintResult>;
+      testPrinter?: (printerName?: string) => Promise<PrintResult>;
+      
+
     };
     printerApi: {
+
       getPrinters: () => Promise<{ success: boolean; printers: PrinterInfo[]; error?: string }>;
-      print: (opts: any) => Promise<{ success: boolean; error?: string }>;
-      savePdf: (opts: any) => Promise<{ success: boolean; path?: string; error?: string }>;
+      print: (opts: PrintOptions) => Promise<PrintResult>;
+      savePdf: (opts: SavePdfOptions) => Promise<SavePdfResult>;
       getPdfPath?: () => Promise<string | null>;
-      printRaw?: (texto: string, printerName?: string) => Promise<{
-        success: boolean;
-        message?: string;
-        error?: string;
-      }>;
+      printRaw?: (texto: string, printerName?: string) => Promise<PrintResult>;
     };
     electron?: {
       app: {

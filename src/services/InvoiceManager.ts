@@ -1,139 +1,273 @@
-import type { PreviewSale } from "../types/sales"
-import ThermalPrintService from "./ThermalPrintService"
+// src/services/InvoiceManager.ts
+import type { PreviewSale } from "../types/sales";
+import ThermalPrintService from "./ThermalPrintService";
 
-// Interfaz para opciones de impresión
+// Interface for print options
 export interface PrintOptions {
-  silent?: boolean
-  printerName?: string
-  copies?: number
+  silent?: boolean;
+  printerName?: string;
+  copies?: number;
 }
 
-// Interfaz para opciones de PDF
+// Interface for PDF options
 export interface SavePdfOptions {
-  directory: string
-  filename?: string
-  overwrite?: boolean
+  directory: string;
+  filename?: string;
+  overwrite?: boolean;
 }
 
 /**
- * Servicio unificado para manejo de facturas, impresión y PDF
- * Actúa como fachada (patrón Facade) para servicios subyacentes
+ * Service for managing invoices, printing, and PDF generation
+ * Acts as a facade for underlying services
  */
 export class InvoiceManager {
-  private static instance: InvoiceManager
-  private thermalPrintService: ThermalPrintService
+  private static instance: InvoiceManager;
+  private thermalPrintService: ThermalPrintService;
+  private settings: any = {};
 
-  // Constructor privado
+  // Private constructor for singleton
   private constructor() {
-    this.thermalPrintService = ThermalPrintService.getInstance()
+    this.thermalPrintService = ThermalPrintService.getInstance();
+    this.loadSettings();
   }
 
-  // Obtener instancia singleton
+  // Get singleton instance
   public static getInstance(): InvoiceManager {
     if (!InvoiceManager.instance) {
-      InvoiceManager.instance = new InvoiceManager()
+      InvoiceManager.instance = new InvoiceManager();
     }
-    return InvoiceManager.instance
+    return InvoiceManager.instance;
   }
 
-  /**
-   * Imprime una factura
-   * @param sale Datos de la venta
-   * @param htmlContent Contenido HTML (opcional)
-   * @param options Opciones de impresión
-   * @returns Resultado de la operación
-   */
-  public async printInvoice(sale: PreviewSale, htmlContent?: string, options?: PrintOptions): Promise<boolean> {
+  // Load settings from app configuration
+  private async loadSettings(): Promise<void> {
     try {
-      // Verificar si la API está disponible
-      if (!window.api?.printInvoice && !window.printerApi?.print) {
-        console.error("API de impresión no disponible")
-        return false
+      if (window.api?.getSettings) {
+        this.settings = await window.api.getSettings();
       }
-
-      // Usar ThermalPrintService para imprimir
-      const result = await this.thermalPrintService.printReceipt(sale)
-      return result.success
     } catch (error) {
-      console.error("Error al imprimir:", error)
-      return false
+      console.error("Error loading settings in InvoiceManager:", error);
+      this.settings = {};
     }
   }
 
   /**
-   * Guardar factura como PDF
-   * @param sale Datos de la venta
-   * @param htmlContent Contenido HTML
-   * @param options Opciones para guardar
-   * @returns Ruta del archivo PDF o null si falla
+   * Print an invoice
+   * @param sale Sale data
+   * @param htmlContent Optional HTML content (if pre-generated)
+   * @param options Print options
+   * @returns Result of the operation
+   */
+  public async printInvoice(
+    sale: PreviewSale, 
+    htmlContent?: string, 
+    options?: PrintOptions
+  ): Promise<boolean> {
+    try {
+      // Refresh settings
+      await this.loadSettings();
+
+      // Check if thermal printing is preferred
+      const useThermal = this.shouldUseThermalPrinter(options?.printerName);
+      
+      if (useThermal) {
+        // Use ThermalPrintService
+        console.log("Using thermal printer for invoice");
+        const result = await this.thermalPrintService.printReceipt(sale);
+        return result.success;
+      } else {
+        // Use standard printing
+        console.log("Using standard printer for invoice");
+        
+        // Ensure HTML content is available
+        const html = htmlContent || this.generatePrintHTML(sale);
+        
+        // Use appropriate API for printing
+        if (window.printerApi?.print) {
+          const result = await window.printerApi.print({
+            html,
+            printerName: options?.printerName,
+            silent: options?.silent !== false,
+            copies: options?.copies || 1
+          });
+          return result.success;
+        } else if (window.api?.printInvoice) {
+          const result = await window.api.printInvoice({
+            html,
+            printerName: options?.printerName,
+            silent: options?.silent !== false,
+            copies: options?.copies || 1
+          });
+          return result.success;
+        }
+        
+        console.error("No printing API available");
+        return false;
+      }
+    } catch (error) {
+      console.error("Error printing invoice:", error);
+      return false;
+    }
+  }
+
+  /**
+   * Save an invoice as PDF
+   * @param sale Sale data
+   * @param htmlContent HTML content to save
+   * @param options PDF options
+   * @returns Path to saved PDF or null if failed
    */
   public async saveAsPdf(
     sale: PreviewSale,
     htmlContent: string,
-    options?: Partial<SavePdfOptions>,
+    options?: Partial<SavePdfOptions>
   ): Promise<string | null> {
     try {
-      // Verificar si la API está disponible
-      if (!window.api?.savePdf && !window.printerApi?.savePdf) {
-        console.warn("API para guardar PDF no disponible")
-        return null
-      }
+      // Refresh settings
+      await this.loadSettings();
 
-      // Cargar configuración si es necesario
-      let saveDirectory = options?.directory || ""
-      if (!saveDirectory && window.api?.getSettings) {
-        const settings = await window.api.getSettings()
-        saveDirectory = settings?.ruta_pdf || ""
-
-        if (!saveDirectory && window.api.getAppPaths) {
-          const paths = await window.api.getAppPaths()
-          // Usar la carpeta "informe" dentro de WilPOS
-          saveDirectory = `${paths.documents}/WilPOS/informe`
+      // Determine save directory
+      let saveDirectory = options?.directory || "";
+      if (!saveDirectory) {
+        if (this.settings?.ruta_pdf) {
+          saveDirectory = this.settings.ruta_pdf;
+        } else if (window.api?.getAppPaths) {
+          const paths = await window.api.getAppPaths();
+          saveDirectory = `${paths.documents}/WilPOS/Facturas`;
+        } else if (window.printerApi?.getPdfPath) {
+          saveDirectory = await window.printerApi.getPdfPath() || "";
         }
       }
 
-      // Generar nombre de archivo si no se proporciona
-      const filename = options?.filename || `factura-${sale.id || "temp"}-${new Date().toISOString().split("T")[0]}.pdf`
+      // Ensure directory exists
+      if (saveDirectory && window.api?.ensureDir) {
+        await window.api.ensureDir(saveDirectory);
+      }
 
-      // Ruta completa
-      const filePath = `${saveDirectory}/${filename}`
+      // Generate filename if not provided
+      const saleId = sale.id || "tmp";
+      const dateStr = new Date().toISOString().split("T")[0];
+      const filename = options?.filename || `factura-${saleId}-${dateStr}.pdf`;
 
-      // Guardar PDF
-      let result
+      // Complete path
+      const filePath = saveDirectory 
+        ? `${saveDirectory}/${filename}` 
+        : filename;
+
+      // Save PDF using appropriate API
       if (window.printerApi?.savePdf) {
-        result = await window.printerApi.savePdf({
+        const result = await window.printerApi.savePdf({
           html: htmlContent,
-          path: filePath,
-          options: { printBackground: true },
-        })
+          path: filePath
+        });
+        
+        if (result.success) {
+          return result.path || filePath;
+        }
+        throw new Error(result.error || "Error saving PDF");
       } else if (window.api?.savePdf) {
-        result = await window.api.savePdf({
+        const result = await window.api.savePdf({
           html: htmlContent,
           path: filePath,
-          options: { printBackground: true },
-        })
+          options: { printBackground: true }
+        });
+        
+        if (result.success) {
+          return result.path || filePath;
+        }
+        throw new Error(result.error || "Error saving PDF");
       }
-
-      if (!result?.success) {
-        throw new Error(result?.error || "Error al guardar PDF")
-      }
-
-      return result.path || filePath
+      
+      throw new Error("No PDF saving API available");
     } catch (error) {
-      console.error("Error al guardar como PDF:", error)
-      return null
+      console.error("Error saving PDF:", error);
+      return null;
     }
   }
 
   /**
-   * Generar HTML para impresora térmica
-   * @param sale Datos de la venta
-   * @returns HTML formateado
+   * Format currency value based on settings
+   * @param amount Amount to format
+   * @returns Formatted currency string
+   */
+  public formatCurrency(amount: number): string {
+    try {
+      // Get currency from settings or use default
+      const currencySymbol = this.settings?.moneda || "RD$";
+      
+      // Try to use Intl API
+      if (typeof Intl !== 'undefined' && Intl.NumberFormat) {
+        // Map common currency symbols to ISO codes
+        const currencyMap: Record<string, string> = {
+          'RD$': 'DOP',
+          '$': 'USD',
+          '€': 'EUR',
+          '£': 'GBP'
+        };
+        
+        // Determine currency code
+        let currencyCode = 'DOP';
+        if (currencyMap[currencySymbol]) {
+          currencyCode = currencyMap[currencySymbol];
+        } else if (currencySymbol.length === 3) {
+          // It might already be an ISO code
+          currencyCode = currencySymbol;
+        }
+        
+        return new Intl.NumberFormat('es-DO', {
+          style: 'currency',
+          currency: currencyCode,
+          minimumFractionDigits: 2
+        }).format(amount);
+      }
+      
+      // Fallback formatting
+      return `${currencySymbol} ${amount.toFixed(2)}`;
+    } catch (error) {
+      console.error("Error formatting currency:", error);
+      return `RD$ ${amount.toFixed(2)}`;
+    }
+  }
+
+  /**
+   * Determine if thermal printer should be used
+   * @param printerName Optional printer name to check
+   * @returns True if thermal printer should be used
+   */
+  private shouldUseThermalPrinter(printerName?: string): boolean {
+    try {
+      if (printerName) {
+        // Check if specified printer name looks like a thermal printer
+        return /thermal|receipt|pos|58mm|80mm|epson|tm-/i.test(printerName);
+      }
+      
+      // Check if thermal printer service has an active printer
+      if (this.thermalPrintService.activePrinter) {
+        return true;
+      }
+      
+      // Check if settings have a thermal printer defined
+      if (this.settings?.impresora_termica) {
+        return true;
+      }
+      
+      // Default to false
+      return false;
+    } catch (error) {
+      console.error("Error determining printer type:", error);
+      return false;
+    }
+  }
+
+  /**
+   * Generate HTML for thermal receipt
+   * @param sale Sale data
+   * @returns HTML string
    */
   public generateThermalPrintHTML(sale: PreviewSale): string {
     try {
-      // Esta función genera un HTML básico para facturas térmicas
-      // Si estás usando FacturaViewer para el HTML, deberías modificar esto
+      // Defer to ThermalPrintService for generation
+      // This is a stub that just creates a basic template
       return `
         <!DOCTYPE html>
         <html>
@@ -216,15 +350,13 @@ export class InvoiceManager {
           </style>
         </head>
         <body>
-          <!-- Header Section -->
           <div class="header">
-            <div class="company">WILPOS</div>
+            <div class="company">${this.settings?.nombre_negocio || 'WILPOS'}</div>
             <div class="invoice-id">Factura #${sale.id || "N/A"}</div>
             <div>Fecha: ${new Date(sale.fecha_venta).toLocaleString()}</div>
             <div>Cliente: ${sale.cliente || "Cliente General"}</div>
           </div>
 
-          <!-- Items Section -->
           <div class="section">DETALLE DE VENTA</div>
           <table>
             <tr>
@@ -234,57 +366,43 @@ export class InvoiceManager {
               <th class="right">TOTAL</th>
             </tr>
             ${sale.detalles
-              .map(
-                (item) => `
-              <tr>
-                <td>${item.quantity}</td>
-                <td>${item.name.substring(0, 18)}${item.name.length > 18 ? "..." : ""}</td>
-                <td class="right">${this.formatCurrency(item.price)}</td>
-                <td class="right">${this.formatCurrency(item.subtotal)}</td>
-              </tr>
-            `,
-              )
+              .map(item => `
+                <tr>
+                  <td>${item.quantity}</td>
+                  <td>${item.name.substring(0, 18)}${item.name.length > 18 ? "..." : ""}</td>
+                  <td class="right">${this.formatCurrency(item.price)}</td>
+                  <td class="right">${this.formatCurrency(item.subtotal)}</td>
+                </tr>
+              `)
               .join("")}
           </table>
 
-          <!-- Totals -->
           <div>
             <div class="total-row">
               <span>Subtotal:</span>
               <span>${this.formatCurrency(sale.total - sale.impuestos)}</span>
             </div>
             
-            ${
-              sale.impuestos > 0
-                ? `
+            ${sale.impuestos > 0 ? `
               <div class="total-row">
                 <span>Impuestos:</span>
                 <span>${this.formatCurrency(sale.impuestos)}</span>
               </div>
-            `
-                : ""
-            }
+            ` : ""}
             
-            ${
-              sale.descuento > 0
-                ? `
+            ${sale.descuento > 0 ? `
               <div class="total-row">
                 <span>Descuento:</span>
                 <span>-${this.formatCurrency(sale.descuento)}</span>
               </div>
-            `
-                : ""
-            }
+            ` : ""}
             
             <div class="grand-total">
               <span>TOTAL:</span>
               <span>${this.formatCurrency(sale.total)}</span>
             </div>
 
-            <!-- Payment Information -->
-            ${
-              sale.metodo_pago === "Efectivo"
-                ? `
+            ${sale.metodo_pago === "Efectivo" ? `
               <div class="total-row">
                 <span>Recibido:</span>
                 <span>${this.formatCurrency(sale.monto_recibido)}</span>
@@ -293,27 +411,24 @@ export class InvoiceManager {
                 <span>Cambio:</span>
                 <span>${this.formatCurrency(sale.cambio)}</span>
               </div>
-            `
-                : `
+            ` : `
               <div class="total-row">
                 <span>Método de pago:</span>
                 <span>${sale.metodo_pago}</span>
               </div>
-            `
-            }
+            `}
           </div>
 
-          <!-- Footer Section -->
           <div class="footer">
-            <p>Gracias por su compra</p>
+            <p>${this.settings?.mensaje_recibo || 'Gracias por su compra'}</p>
             <p>WILPOS - Sistema de Punto de Venta</p>
             <p>${new Date().toLocaleDateString()} ${new Date().toLocaleTimeString()}</p>
           </div>
         </body>
         </html>
-      `
+      `;
     } catch (error) {
-      console.error("Error generating thermal print HTML:", error)
+      console.error("Error generating thermal print HTML:", error);
       return `
         <!DOCTYPE html>
         <html>
@@ -332,17 +447,23 @@ export class InvoiceManager {
           <p>WILPOS - Sistema de Punto de Venta</p>
         </body>
         </html>
-      `
+      `;
     }
   }
 
   /**
-   * Genera contenido HTML para impresión estándar
-   * @param sale Datos de la venta
-   * @returns HTML formateado
+   * Generate HTML for standard print layout
+   * @param sale Sale data
+   * @returns HTML string
    */
   public generatePrintHTML(sale: PreviewSale): string {
     try {
+      const businessName = this.settings?.nombre_negocio || 'WilPOS';
+      const businessAddress = this.settings?.direccion || '';
+      const businessPhone = this.settings?.telefono || '';
+      const businessRnc = this.settings?.rnc || '';
+      const footerMessage = this.settings?.mensaje_recibo || 'Gracias por su compra';
+      
       return `
         <!DOCTYPE html>
         <html>
@@ -420,13 +541,21 @@ export class InvoiceManager {
               font-size: 12px;
               color: #666;
             }
+            @media print {
+              body {
+                -webkit-print-color-adjust: exact;
+                print-color-adjust: exact;
+              }
+            }
           </style>
         </head>
         <body>
           <div class="invoice-container">
             <div class="header">
-              <div class="company-name">WILPOS</div>
-              <div>Sistema de Punto de Venta</div>
+              <div class="company-name">${businessName}</div>
+              ${businessAddress ? `<div>${businessAddress}</div>` : ''}
+              ${businessPhone ? `<div>Tel: ${businessPhone}</div>` : ''}
+              ${businessRnc ? `<div>RNC: ${businessRnc}</div>` : ''}
             </div>
             
             <div class="invoice-title">FACTURA #${sale.id || "N/A"}</div>
@@ -454,17 +583,18 @@ export class InvoiceManager {
               </thead>
               <tbody>
                 ${sale.detalles
-                  .map(
-                    (item) => `
-                  <tr>
-                    <td>${item.name}</td>
-                    <td>${item.quantity}</td>
-                    <td>${this.formatCurrency(item.price)}</td>
-                    <td>${item.is_exempt ? "Exento" : (item.itebis * 100).toFixed(0) + "%"}</td>
-                    <td>${this.formatCurrency(item.subtotal)}</td>
-                  </tr>
-                `,
-                  )
+                  .map(item => {
+                    const taxStatus = item.is_exempt ? "Exento" : (item.itebis * 100).toFixed(0) + "%";
+                    return `
+                      <tr>
+                        <td>${item.name}</td>
+                        <td>${item.quantity}</td>
+                        <td>${this.formatCurrency(item.price)}</td>
+                        <td>${taxStatus}</td>
+                        <td>${this.formatCurrency(item.subtotal)}</td>
+                      </tr>
+                    `;
+                  })
                   .join("")}
               </tbody>
             </table>
@@ -475,26 +605,22 @@ export class InvoiceManager {
               ${sale.descuento > 0 ? `<div><strong>Descuento:</strong> -${this.formatCurrency(sale.descuento)}</div>` : ""}
               <div class="total-line"><strong>TOTAL:</strong> ${this.formatCurrency(sale.total)}</div>
               
-              ${
-                sale.metodo_pago === "Efectivo"
-                  ? `
+              ${sale.metodo_pago === "Efectivo" ? `
                 <div><strong>Monto recibido:</strong> ${this.formatCurrency(sale.monto_recibido)}</div>
                 <div><strong>Cambio:</strong> ${this.formatCurrency(sale.cambio)}</div>
-              `
-                  : ""
-              }
+              ` : ""}
             </div>
             
             <div class="footer">
-              <p>Gracias por su compra</p>
+              <p>${footerMessage}</p>
               <p>${new Date().toLocaleDateString()} ${new Date().toLocaleTimeString()}</p>
             </div>
           </div>
         </body>
         </html>
-      `
+      `;
     } catch (error) {
-      console.error("Error generating print HTML:", error)
+      console.error("Error generating print HTML:", error);
       return `
         <!DOCTYPE html>
         <html>
@@ -512,28 +638,9 @@ export class InvoiceManager {
           <p>Gracias por su compra</p>
         </body>
         </html>
-      `
-    }
-  }
-
-  /**
-   * Formatea valores monetarios
-   * @param amount Cantidad a formatear
-   * @returns Cadena formateada
-   */
-  private formatCurrency(amount: number): string {
-    try {
-      // Formatear usando Intl.NumberFormat
-      return new Intl.NumberFormat("es-DO", {
-        style: "currency",
-        currency: "DOP",
-        minimumFractionDigits: 2,
-      }).format(amount)
-    } catch (error) {
-      // Formato alternativo en caso de error
-      return `RD$ ${amount.toFixed(2)}`
+      `;
     }
   }
 }
 
-export default InvoiceManager
+export default InvoiceManager;

@@ -1,6 +1,7 @@
+// src/types/sales.ts
+
 import { User } from "./user";
 
-// src/types/sales.ts - Extended types definition for sales
 export interface CartItem {
   id?: number;
   product_id: number;

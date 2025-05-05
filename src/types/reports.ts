@@ -1,4 +1,4 @@
-// src/types/reports.ts - Tipos para informes y reportes
+// src/types/reports.ts 
 
 // Tipo para alertas en la interfaz
 export type AlertType = "success" | "warning" | "error" | "info"
@@ -28,11 +28,15 @@ export interface SalesData {
     total: number
     count: number
     average: number
+    discounts: number
+    taxes: number
   }
   period: {
     total: number
     count: number
     average: number
+    discounts: number
+    taxes: number
     growth: number
   }
   byMonth: {

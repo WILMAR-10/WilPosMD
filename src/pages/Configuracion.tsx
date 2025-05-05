@@ -1,11 +1,11 @@
-﻿// Configuracion.tsx 
+﻿// src/pages/Configuracion.tsx 
 import React, { useState, useEffect, useCallback } from 'react';
 import { 
   Save, Settings, Printer, ChevronLeft, 
   User, LogOut, Store, Phone, Mail, 
   Globe, FileText, DollarSign, Calendar, 
   Upload, Check, AlertTriangle, X, Folder,
-  ShieldAlert, ShieldCheck, RotateCcw
+  ShieldAlert, ShieldCheck, RotateCcw, Info
 } from 'lucide-react';
 import { useAuth } from '../services/AuthContext';
 import { useSettings, Settings as SettingsType } from '../services/DatabaseService';
@@ -13,7 +13,9 @@ import ConfirmDialog from '../components/ConfirmDialog';
 import ProtectedRoute from '../components/ProtectedRoute';
 import Unauthorized from '../components/Unauthorized';
 import ThermalPrintService from '../services/ThermalPrintService';
+import { PrinterType } from '../types/printer';
 
+// Define types
 // Define types
 interface Printer {
   name: string;
@@ -21,6 +23,17 @@ interface Printer {
   status?: number;
   isDefault?: boolean;
   isThermal?: boolean;
+}
+
+interface PrinterOption {
+  value: string;
+  label: string;
+  isThermal?: boolean;
+}
+
+interface PrintSpeed {
+  value: string;
+  label: string;
 }
 
 type AlertType = 'success' | 'warning' | 'error' | 'info';
@@ -42,10 +55,14 @@ const Configuracion: React.FC = () => {
     formato_fecha: 'DD/MM/YYYY',
     impuesto_nombre: 'ITEBIS',
     impuesto_porcentaje: 0.18,
-    impresora_termica: '',
+    impresora_termica: settings?.impresora_termica || '',
     guardar_pdf: true,
     ruta_pdf: '',
-    tipo_impresora: 'normal',
+    tipo_impresora: settings?.tipo_impresora || 'normal',
+    printer_speed: settings?.printer_speed || '220',
+    print_density: settings?.print_density || 'medium',
+    auto_cut: settings?.auto_cut !== false, // default to true
+    open_cash_drawer: settings?.open_cash_drawer || false,
   });
   
   // Estado para el logo
@@ -56,7 +73,30 @@ const Configuracion: React.FC = () => {
   const [activeTab, setActiveTab] = useState('general');
   const [isSaving, setIsSaving] = useState(false);
   const [alert, setAlert] = useState<{ type: AlertType; message: string } | null>(null);
+
+  // Estados para el manejo de impresoras
   const [printers, setPrinters] = useState<Printer[]>([]);
+  const [printerOptions, setPrinterOptions] = useState<PrinterOption[]>([]);
+  const [loadingPrinters, setLoadingPrinters] = useState<boolean>(false);
+  const [printerTestStatus, setPrinterTestStatus] = useState<{
+    testing: boolean;
+    success?: boolean;
+    message?: string;
+  }>({ testing: false });
+  
+  // Opciones de velocidad de impresión basadas en el manual
+  const printSpeedOptions: PrintSpeed[] = [
+    { value: "150", label: "150 mm/s" },
+    { value: "200", label: "200 mm/s" },
+    { value: "220", label: "220 mm/s (Máxima)" }
+  ];
+  
+  // Opciones de densidad de impresión
+  const printDensityOptions = [
+    { value: "low", label: "Baja" },
+    { value: "medium", label: "Media" },
+    { value: "high", label: "Alta" }
+  ];
   
   // Diálogo de confirmación
   const [confirmDialog, setConfirmDialog] = useState({
@@ -93,6 +133,10 @@ const Configuracion: React.FC = () => {
             guardar_pdf: settings.guardar_pdf !== undefined ? settings.guardar_pdf : true,
             ruta_pdf: settings.ruta_pdf || '', 
             tipo_impresora: settings.tipo_impresora || 'normal',
+            printer_speed: settings.printer_speed || '220',
+            print_density: settings.print_density || 'medium',
+            auto_cut: settings.auto_cut !== false, // default to true
+            open_cash_drawer: settings.open_cash_drawer || false,
           });
           
           if (settings.logo) {
@@ -112,42 +156,98 @@ const Configuracion: React.FC = () => {
   }, [settings]);
 
   // Cargar rutas y listado de impresoras
-  useEffect(() => {
-    const init = async () => {
-      if (!window.api) {
-        console.error('API no disponible');
-        return;
+  const loadPrinters = useCallback(async () => {
+    try {
+      setLoadingPrinters(true);
+      
+      // Intentar obtener impresoras desde la API
+      let printersList: Printer[] = [];
+      
+      if (window.printerApi?.getPrinters) {
+        const result = await window.printerApi.getPrinters();
+        if (result.success && result.printers) {
+          printersList = result.printers;
+        }
+      } else if (window.api?.getPrinters) {
+        printersList = await window.api.getPrinters();
+      } else {
+        throw new Error("API de impresoras no disponible");
       }
       
-      try {
-        if (window.api.getAppPaths) {
-          const paths = await window.api.getAppPaths();
-          
-          setFormData(prev => ({
-            ...prev,
-            ruta_pdf: prev.ruta_pdf || `${paths.documents}/WilPOS/Facturas`
-          }));
-        }
-        
-        await loadPrinters();
-      } catch (error) {
-        console.error('Error initializing settings:', error);
+      // Detectar impresoras térmicas basándonos en patrones del nombre (basado en el manual)
+      // SPRT, POS, thermal, receipt, 58mm, 80mm son indicadores de impresoras térmicas
+      const printersWithType = printersList.map(printer => ({
+        ...printer,
+        isThermal: printer.isThermal !== undefined ? printer.isThermal : 
+          /thermal|receipt|pos|58mm|80mm|sprt|epson|tm-|tmt/i.test(printer.name)
+      }));
+      
+      setPrinters(printersWithType);
+      
+      // Crear opciones para el selector con formato especial para impresoras térmicas
+      const options: PrinterOption[] = printersWithType.map(printer => ({
+        value: printer.name,
+        label: `${printer.name}${printer.isDefault ? ' (Predeterminada)' : ''}${printer.isThermal ? ' 🧾' : ''}`,
+        isThermal: printer.isThermal
+      }));
+      
+      setPrinterOptions(options);
+      
+      // Si la impresora configurada ya no está disponible, mostrar advertencia
+      if (formData.impresora_termica && !printersWithType.some(p => p.name === formData.impresora_termica)) {
         setAlert({
-          type: 'error',
-          message: 'Error al cargar la configuración inicial'
+          type: 'warning',
+          message: `La impresora configurada "${formData.impresora_termica}" no está disponible actualmente`
         });
       }
-    };
-    
-    init();
-  }, []);
-  
+      
+    } catch (error) {
+      console.error('Error al cargar impresoras:', error);
+      setAlert({
+        type: 'error',
+        message: `Error al cargar impresoras: ${error instanceof Error ? error.message : 'Error desconocido'}`
+      });
+    } finally {
+      setLoadingPrinters(false);
+    }
+  }, [formData.impresora_termica, setAlert]);
+
   // Cuando cambie la pestaña y sea 'facturacion', refresca la lista
   useEffect(() => {
     if (activeTab === 'facturacion') {
       loadPrinters();
     }
-  }, [activeTab]);
+  }, [activeTab, loadPrinters]);
+  
+  // Efecto para actualizar la configuración de ThermalPrintService cuando cambie el tipo de impresora
+  useEffect(() => {
+    try {
+      if (formData.tipo_impresora) {
+        const thermalPrintService = ThermalPrintService.getInstance();
+        
+        // Configurar el ancho del papel según el tipo de impresora
+        if (formData.tipo_impresora === 'termica58') {
+          thermalPrintService.paperWidth = '58mm';
+        } else {
+          thermalPrintService.paperWidth = '80mm';
+        }
+        
+        // Configurar la impresora activa
+        if (formData.impresora_termica) {
+          thermalPrintService.activePrinter = formData.impresora_termica;
+        }
+        
+        // Guardar la configuración (opcional, solo si hay cambios)
+        if (formData.impresora_termica !== thermalPrintService.activePrinter || 
+            (formData.tipo_impresora === 'termica58' && thermalPrintService.paperWidth !== '58mm') ||
+            (formData.tipo_impresora === 'termica' && thermalPrintService.paperWidth !== '80mm')) {
+          thermalPrintService.saveSettings();
+        }
+      }
+    } catch (error) {
+      console.error('Error al configurar servicio de impresión:', error);
+    }
+  }, [formData.tipo_impresora, formData.impresora_termica]);
 
   // Manejar cambios en el formulario
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
@@ -222,7 +322,57 @@ const Configuracion: React.FC = () => {
         updatedSettings.logo = undefined;
       }
       
-      // Guardar configuración
+      // Asegurar que la ruta de PDF existe si está habilitada la opción
+      if (updatedSettings.guardar_pdf && !updatedSettings.ruta_pdf) {
+        try {
+          const api = window.api;
+          if (api?.getAppPaths) {
+            const paths = await api.getAppPaths();
+            const docsPath = paths.documents;
+            const defaultPdfPath = `${docsPath}/WilPOS/Facturas`;
+            
+            // Crear la carpeta si no existe
+            if (api.ensureDir) {
+              await api.ensureDir(defaultPdfPath);
+            }
+            
+            updatedSettings.ruta_pdf = defaultPdfPath;
+          }
+        } catch (error) {
+          console.error('Error al configurar ruta de PDF:', error);
+        }
+      }
+      
+      // Actualizar la configuración en ThermalPrintService antes de guardar
+      try {
+        const thermalPrintService = ThermalPrintService.getInstance();
+        
+        // Configurar el ancho del papel según el tipo de impresora
+        if (updatedSettings.tipo_impresora === 'termica58') {
+          thermalPrintService.paperWidth = '58mm';
+        } else if (updatedSettings.tipo_impresora === 'termica') {
+          thermalPrintService.paperWidth = '80mm';
+        }
+        
+        // Configurar la impresora activa y otras opciones
+        if (updatedSettings.impresora_termica) {
+          thermalPrintService.activePrinter = updatedSettings.impresora_termica;
+        }
+        
+        // Configurar opciones adicionales en el servicio
+        thermalPrintService.printSpeed = updatedSettings.printer_speed || '220';
+        thermalPrintService.printDensity = updatedSettings.print_density || 'medium';
+        thermalPrintService.autoCut = updatedSettings.auto_cut !== false;
+        thermalPrintService.autoOpenCashDrawer = updatedSettings.open_cash_drawer || false;
+        
+        // Guardar la configuración en el servicio
+        await thermalPrintService.saveSettings();
+        
+      } catch (error) {
+        console.error('Error al configurar servicio de impresión:', error);
+      }
+      
+      // Guardar configuración en la base de datos
       await saveSettings(updatedSettings);
       
       setAlert({
@@ -231,6 +381,7 @@ const Configuracion: React.FC = () => {
       });
       
     } catch (error) {
+      console.error('Error completo:', error);
       setAlert({
         type: 'error',
         message: `Error al guardar configuración: ${error instanceof Error ? error.message : 'Error desconocido'}`
@@ -262,28 +413,53 @@ const Configuracion: React.FC = () => {
   
   // Abrir carpeta de facturas
   const handleOpenFolder = async () => {
-    if (!formData.ruta_pdf) {
-      setAlert({
-        type: 'warning',
-        message: 'No hay una ruta configurada para las facturas'
-      });
-      return;
-    }
-    
     try {
-      if (window.api?.openFolder) {
-        await window.api.openFolder(formData.ruta_pdf);
+      const api = window.api;
+      
+      if (!api?.getAppPaths) {
+        throw new Error("La API no está disponible");
+      }
+
+      // Definir la ruta base para las facturas
+      const paths = await api.getAppPaths();
+      const docsPath = paths.documents;
+      const facturaPath = formData.ruta_pdf || `${docsPath}/WilPOS/Facturas`;
+
+      // Asegurar que la carpeta existe antes de intentar abrirla
+      if (api.ensureDir) {
+        const dirResult = await api.ensureDir(facturaPath);
+        if (!dirResult.success) {
+          throw new Error(`No se pudo crear la carpeta: ${dirResult.error}`);
+        }
+      }
+
+      // Actualizar la ruta en el formulario si es necesario
+      if (!formData.ruta_pdf) {
+        setFormData(prev => ({
+          ...prev,
+          ruta_pdf: facturaPath
+        }));
+      }
+
+      // Abrir la carpeta
+      if (api.openFolder) {
+        await api.openFolder(facturaPath);
+        setAlert({
+          type: 'success',
+          message: 'Carpeta de facturas abierta correctamente'
+        });
       } else {
         setAlert({
           type: 'info',
-          message: `Ruta de facturas: ${formData.ruta_pdf}`
+          message: `Ruta de facturas: ${facturaPath}`
         });
       }
+      
     } catch (error) {
       console.error('Error al abrir carpeta:', error);
       setAlert({
         type: 'error',
-        message: 'No se pudo abrir la carpeta de facturas'
+        message: `No se pudo abrir la carpeta: ${error instanceof Error ? error.message : 'Error desconocido'}`
       });
     }
   };
@@ -332,151 +508,99 @@ const Configuracion: React.FC = () => {
       return () => clearTimeout(timer);
     }
   }, [alert]);
-  
-  // Función para cargar impresoras
-  const loadPrinters = async () => {
-    const thermalService = ThermalPrintService.getInstance();
-    try {
-      const { printers } = await thermalService.getAllPrinters();
-      if (printers?.length) {
-        console.log('Impresoras cargadas correctamente:', printers.map(p => p.name));
-        setPrinters(printers);
-        return;
-      }
-      if (formData.impresora_termica) {
-        const fallback = [
-          {
-            name: formData.impresora_termica,
-            description: 'Configurada en el sistema',
-            isDefault: true,
-            isThermal: true
-          },
-          { name: 'Microsoft Print to PDF', isDefault: false, isThermal: false }
-        ];
-        console.log('Usando impresoras de respaldo:', fallback);
-        setPrinters(fallback);
-        return;
-      }
-      console.warn('No se encontraron impresoras disponibles');
-      setPrinters([]);
-      setAlert({ type: 'info', message: 'No se detectaron impresoras. Revise la conexión.' });
-    } catch (error) {
-      console.error('Error al cargar impresoras:', error);
-      if (formData.impresora_termica) {
-        const fallback = [{
-          name: formData.impresora_termica,
-          isDefault: true,
-          isThermal: true
-        }];
-        console.log('Usando impresora configurada como respaldo:', fallback);
-        setPrinters(fallback);
-        return;
-      }
-      setPrinters([]);
+
+  // Función para probar la impresora seleccionada
+  const handleTestPrinter = async () => {
+    if (!formData.impresora_termica) {
       setAlert({
         type: 'warning',
-        message: 'Error al obtener lista de impresoras: ' +
-                 (error instanceof Error ? error.message : 'Error desconocido')
+        message: 'Seleccione una impresora primero'
       });
+      return;
     }
-  };
-
-  // Función para probar impresora térmica
-  const testThermalPrinter = async () => {
+    
     try {
-      setAlert({ type: 'info', message: 'Probando impresora térmica...' });
-      const thermalService = ThermalPrintService.getInstance();
-      const result = await thermalService.testPrinter();
-      setAlert({
-        type: result.success ? 'success' : 'error',
-        // ensure message is a string:
-        message: result.message ?? 'Sin respuesta de la impresora'
-      });
+      setPrinterTestStatus({ testing: true });
+      
+      const thermalPrintService = ThermalPrintService.getInstance();
+      
+      // Configurar el tipo de impresora según la selección
+      thermalPrintService.paperWidth = formData.tipo_impresora === 'termica58' ? '58mm' : '80mm';
+      
+      // Intentar imprimir página de prueba
+      const result = await thermalPrintService.testPrinter(formData.impresora_termica);
+      
+      if (result.success) {
+        setPrinterTestStatus({
+          testing: false,
+          success: true,
+          message: 'Prueba de impresión enviada correctamente'
+        });
+        setAlert({
+          type: 'success',
+          message: 'Prueba de impresión enviada correctamente'
+        });
+      } else {
+        throw new Error(result.error || 'Error al imprimir');
+      }
     } catch (error) {
-      console.error('Error probando impresora térmica:', error);
+      console.error('Error al probar impresora:', error);
+      setPrinterTestStatus({
+        testing: false,
+        success: false,
+        message: error instanceof Error ? error.message : 'Error al imprimir'
+      });
       setAlert({
         type: 'error',
-        message:
-          'Error al probar impresora: ' +
-          (error instanceof Error ? error.message : 'Error desconocido')
+        message: `Error al probar impresora: ${error instanceof Error ? error.message : 'Error desconocido'}`
       });
     }
   };
 
-  // Si el usuario no tiene permiso para ver la configuración, mostrar el componente de acceso no autorizado
-  if (!canViewSettings) {
-    return <Unauthorized />;
-  }
-  
+  // Función para abrir cajón de dinero (si la impresora lo soporta)
+  const handleOpenCashDrawer = async () => {
+    if (!formData.impresora_termica) {
+      setAlert({
+        type: 'warning',
+        message: 'Seleccione una impresora primero'
+      });
+      return;
+    }
+    
+    try {
+      setPrinterTestStatus({ testing: true });
+      
+      const thermalPrintService = ThermalPrintService.getInstance();
+      const result = await thermalPrintService.openCashDrawer(formData.impresora_termica);
+      
+      if (result.success) {
+        setPrinterTestStatus({
+          testing: false,
+          success: true,
+          message: 'Comando de apertura de cajón enviado'
+        });
+        setAlert({
+          type: 'success',
+          message: 'Comando de apertura de cajón enviado. Verifique si el cajón se abrió.'
+        });
+      } else {
+        throw new Error(result.error || 'Error al enviar comando al cajón');
+      }
+    } catch (error) {
+      console.error('Error al abrir cajón:', error);
+      setPrinterTestStatus({
+        testing: false,
+        success: false,
+        message: error instanceof Error ? error.message : 'Error al abrir cajón' 
+      });
+      setAlert({
+        type: 'error',
+        message: `Error al abrir cajón: ${error instanceof Error ? error.message : 'La impresora puede no soportar control de cajón'}`
+      });
+    }
+  };
+
   // Renderizado de pestañas
-  const renderPrinterSelect = () => (
-    <div>
-      <label className="block text-sm font-medium text-gray-700 mb-1">
-        Impresora Térmica
-      </label>
-      
-      {/* Estado de carga de impresoras */}
-      {printers.length === 0 && (
-        <div className="p-3 mb-3 bg-yellow-50 border border-yellow-200 rounded-md text-yellow-800 text-sm">
-          <div className="flex items-center mb-1">
-            <AlertTriangle className="h-4 w-4 mr-2 text-yellow-600" />
-            <span className="font-medium">No se detectaron impresoras</span>
-          </div>
-          <p className="text-xs">
-            Asegúrese de que su impresora está conectada y encendida,
-            luego haga clic en "Diagnóstico de impresoras" para volver a intentarlo.
-          </p>
-        </div>
-      )}
-      
-      <select
-        name="impresora_termica"
-        value={formData.impresora_termica}
-        onChange={handleChange}
-        className="w-full p-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-        disabled={!canConfigurePrinter}
-      >
-        <option value="">Usar impresora predeterminada del sistema</option>
-        {printers.map((printer) => (
-          <option 
-            key={printer.name} 
-            value={printer.name}
-            // Añadir class para destacar impresoras térmicas
-            className={printer.isThermal ? 'font-medium text-blue-600' : ''}
-          >
-            {printer.name}
-            {printer.isDefault ? ' (Predeterminada)' : ''}
-            {printer.isThermal ? ' (Térmica)' : ''}
-          </option>
-        ))}
-      </select>
-      
-      {/* Botón para refrescar la lista de impresoras */}
-      <div className="mt-2 flex justify-end">
-        <button
-          type="button"
-          onClick={loadPrinters}
-          className="text-xs text-blue-600 hover:text-blue-800 flex items-center"
-          disabled={!canConfigurePrinter}
-        >
-          <RotateCcw className="h-3 w-3 mr-1" />
-          Actualizar lista de impresoras
-        </button>
-      </div>
-      
-      {!canConfigurePrinter && (
-        <p className="text-xs text-yellow-600 mt-1">
-          Se requieren permisos de configuración para cambiar la impresora
-        </p>
-      )}
-      
-      {/* Add helper text explaining printer selection */}
-      <p className="text-xs text-gray-500 mt-1">
-        Si no selecciona ninguna impresora, se usará la impresora predeterminada del sistema.
-        Las impresoras térmicas suelen ser de 80mm o 58mm para tickets.
-      </p>
-    </div>
-  );
 
   const renderTab = () => {
     switch (activeTab) {
@@ -740,8 +864,8 @@ const Configuracion: React.FC = () => {
               </div>
             </div>
 
-            <div className="mt-6 space-y-4">
-              <h3 className="text-lg font-medium">Configuración de Impresión</h3>
+            <div className="mt-6 space-y-6">
+              <h3 className="text-lg font-medium">Configuración de Impresora</h3>
               
               <div>
                 <label className="flex items-center space-x-3">
@@ -786,50 +910,213 @@ const Configuracion: React.FC = () => {
                 </div>
               )}
             
-              {renderPrinterSelect()}
-
-              <div className="mt-4">
-                <button
-                  type="button"
-                  onClick={async () => {
-                    try {
-                      setAlert({ type: 'info', message: 'Ejecutando diagnóstico de impresoras...' });
-                      const { runPrinterDiagnostic } = await import('../utils/PrinterDiagnostic');
-                      await runPrinterDiagnostic();
-                      setAlert({ 
-                        type: 'success', 
-                        message: 'Diagnóstico completado. Revisa la consola para más detalles (F12)' 
-                      });
-                    } catch (error) {
-                      setAlert({ 
-                        type: 'error', 
-                        message: 'Error durante el diagnóstico. Revisa la consola para más detalles.' 
-                      });
-                    }
-                  }}
-                  className="flex items-center gap-2 py-2 px-4 bg-blue-100 text-blue-700 rounded-md hover:bg-blue-200 transition"
-                >
-                  <Printer className="h-4 w-4" />
-                  Ejecutar diagnóstico de impresoras
-                </button>
-                <p className="text-xs text-gray-500 mt-1">
-                  Esto mostrará información detallada sobre las impresoras en la consola (F12)
-                </p>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                <div>
+                  <label htmlFor="tipo_impresora" className="block text-sm font-medium text-gray-700 mb-1">
+                    Tipo de Impresora
+                  </label>
+                  <div className="relative">
+                    <Printer className="absolute left-3 top-3 text-gray-400 h-4 w-4" />
+                    <select
+                      id="tipo_impresora"
+                      name="tipo_impresora"
+                      className="pl-10 w-full p-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      value={formData.tipo_impresora}
+                      onChange={handleChange}
+                      disabled={!canConfigurePrinter}
+                    >
+                      <option value="normal">Impresora Estándar</option>
+                      <option value="termica">Impresora Térmica 80mm</option>
+                      <option value="termica58">Impresora Térmica 58mm</option>
+                    </select>
+                  </div>
+                  <p className="text-xs text-gray-500 mt-1">
+                    Seleccione el tipo de impresora para los recibos. Las impresoras térmicas SPRT-POS891 soportan ancho de 80mm.
+                  </p>
+                </div>
+                
+                <div>
+                  <label htmlFor="printer_speed" className="block text-sm font-medium text-gray-700 mb-1">
+                    Velocidad de Impresión
+                  </label>
+                  <select
+                    id="printer_speed"
+                    name="printer_speed"
+                    className="w-full p-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    value={formData.printer_speed || '220'}
+                    onChange={handleChange}
+                    disabled={!canConfigurePrinter || formData.tipo_impresora === 'normal'}
+                  >
+                    {printSpeedOptions.map(option => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="text-xs text-gray-500 mt-1">
+                    Solo aplicable para impresoras térmicas. La velocidad máxima recomendada es 220mm/s.
+                  </p>
+                </div>
               </div>
-
-              <div className="mt-2">
-                <button
-                  type="button"
-                  onClick={testThermalPrinter}
-                  className="flex items-center gap-2 py-2 px-4 bg-green-100 text-green-700 rounded-md hover:bg-green-200 transition"
-                  disabled={!formData.impresora_termica}
-                >
-                  <Printer className="h-4 w-4" />
-                  Probar impresora térmica
-                </button>
-                <p className="text-xs text-gray-500 mt-1">
-                  Esto enviará una página de prueba a la impresora térmica seleccionada
-                </p>
+              
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                <div>
+                  <label htmlFor="print_density" className="block text-sm font-medium text-gray-700 mb-1">
+                    Densidad de Impresión
+                  </label>
+                  <select
+                    id="print_density"
+                    name="print_density"
+                    className="w-full p-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    value={formData.print_density || 'medium'}
+                    onChange={handleChange}
+                    disabled={!canConfigurePrinter || formData.tipo_impresora === 'normal'}
+                  >
+                    {printDensityOptions.map(option => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="text-xs text-gray-500 mt-1">
+                    Ajusta la oscuridad de la impresión. Mayor densidad consume más batería y puede reducir la vida útil del cabezal.
+                  </p>
+                </div>
+                
+                <div>
+                  <label className="flex items-center space-x-3 mb-4">
+                    <input
+                      type="checkbox"
+                      name="auto_cut"
+                      checked={formData.auto_cut !== false}
+                      onChange={(e) => setFormData({...formData, auto_cut: e.target.checked})}
+                      className="form-checkbox h-5 w-5 text-blue-600"
+                      disabled={!canConfigurePrinter || formData.tipo_impresora === 'normal'}
+                    />
+                    <span className={!canConfigurePrinter || formData.tipo_impresora === 'normal' ? 'text-gray-400' : ''}>
+                      Corte automático de papel
+                    </span>
+                  </label>
+                  
+                  <label className="flex items-center space-x-3">
+                    <input
+                      type="checkbox"
+                      name="open_cash_drawer"
+                      checked={formData.open_cash_drawer === true}
+                      onChange={(e) => setFormData({...formData, open_cash_drawer: e.target.checked})}
+                      className="form-checkbox h-5 w-5 text-blue-600"
+                      disabled={!canConfigurePrinter || formData.tipo_impresora === 'normal'}
+                    />
+                    <span className={!canConfigurePrinter || formData.tipo_impresora === 'normal' ? 'text-gray-400' : ''}>
+                      Abrir cajón automáticamente al imprimir
+                    </span>
+                  </label>
+                  
+                  <p className="text-xs text-gray-500 mt-1">
+                    La impresora SPRT-POS891 tiene un puerto RJ-11 para conexión de cajón de dinero.
+                  </p>
+                </div>
+              </div>
+              
+              <div>
+                <label htmlFor="impresora_termica" className="block text-sm font-medium text-gray-700 mb-1">
+                  Seleccionar Impresora
+                </label>
+                <div className="flex items-center gap-2">
+                  <select
+                    id="impresora_termica"
+                    name="impresora_termica"
+                    className="flex-1 p-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    value={formData.impresora_termica || ''}
+                    onChange={handleChange}
+                    disabled={!canConfigurePrinter || loadingPrinters}
+                  >
+                    <option value="">Seleccione una impresora</option>
+                    {printerOptions.map((printer) => (
+                      <option key={printer.value} value={printer.value}>
+                        {printer.label}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    onClick={loadPrinters}
+                    className="p-2 border border-gray-300 rounded-lg hover:bg-gray-100 flex items-center justify-center"
+                    title="Actualizar lista de impresoras"
+                    disabled={loadingPrinters}
+                  >
+                    <RotateCcw className={`h-5 w-5 text-gray-600 ${loadingPrinters ? 'animate-spin' : ''}`} />
+                  </button>
+                </div>
+                
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {loadingPrinters ? (
+                    <div className="text-sm text-gray-500">Cargando impresoras...</div>
+                  ) : printers.length === 0 ? (
+                    <div className="text-sm text-yellow-500">No se encontraron impresoras disponibles</div>
+                  ) : (
+                    <div className="text-xs text-gray-500">
+                      <span>{printers.length} impresoras disponibles. </span>
+                      {printers.filter(p => p.isThermal).length > 0 ? (
+                        <span className="text-green-600">{printers.filter(p => p.isThermal).length} impresoras térmicas detectadas.</span>
+                      ) : (
+                        <span className="text-yellow-600">No se detectaron impresoras térmicas.</span>
+                      )}
+                    </div>
+                  )}
+                </div>
+                
+                <div className="mt-4 flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={handleTestPrinter}
+                    className={`py-2 px-4 rounded-lg flex items-center gap-2 ${
+                      printerTestStatus.testing || !formData.impresora_termica || !canConfigurePrinter
+                        ? 'bg-gray-100 text-gray-500 cursor-not-allowed' 
+                        : 'bg-blue-600 hover:bg-blue-700 text-white'
+                    }`}
+                    disabled={printerTestStatus.testing || !formData.impresora_termica || !canConfigurePrinter}
+                  >
+                    {printerTestStatus.testing ? (
+                      <>
+                        <div className="animate-spin h-4 w-4 border-2 border-white border-t-transparent rounded-full"></div>
+                        <span>Probando...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Printer className="h-4 w-4" />
+                        <span>Imprimir página de prueba</span>
+                      </>
+                    )}
+                  </button>
+                  
+                  {formData.tipo_impresora !== 'normal' && (
+                    <button
+                      type="button"
+                      onClick={handleOpenCashDrawer}
+                      className={`py-2 px-4 rounded-lg flex items-center gap-2 ${
+                        printerTestStatus.testing || !formData.impresora_termica || !canConfigurePrinter
+                          ? 'bg-gray-100 text-gray-500 cursor-not-allowed' 
+                          : 'bg-indigo-600 hover:bg-indigo-700 text-white'
+                      }`}
+                      disabled={printerTestStatus.testing || !formData.impresora_termica || !canConfigurePrinter}
+                    >
+                      <DollarSign className="h-4 w-4" />
+                      <span>Probar cajón</span>
+                    </button>
+                  )}
+                </div>
+                
+                {/* Estado de prueba de impresora */}
+                {printerTestStatus.message && !printerTestStatus.testing && (
+                  <div className={`mt-2 p-2 rounded-md text-sm ${
+                    printerTestStatus.success 
+                      ? 'bg-green-50 text-green-700 border border-green-200' 
+                      : 'bg-red-50 text-red-700 border border-red-200'
+                  }`}>
+                    {printerTestStatus.message}
+                  </div>
+                )}
               </div>
             </div>
           </div>

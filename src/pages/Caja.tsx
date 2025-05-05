@@ -1,12 +1,12 @@
-﻿// Caja.tsx
+﻿// src/pages/Caja.tsx
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import ThermalPrintService, { ThermalPaperSize } from '../services/ThermalPrintService';
+import ThermalPrintService from '../services/ThermalPrintService';
 import InvoiceManager from '../services/InvoiceManager';
-import { 
-  ShoppingCart, Search, Package, DollarSign, User, 
+import {
+  ShoppingCart, Search, Package, DollarSign, User,
   Trash2, Plus, Minus, X, CreditCard, Wallet, ChevronLeft,
-  Check, AlertTriangle, AlertCircle, Printer, ArrowLeft, 
-  Eye, ShieldCheck, Folder, RotateCcw
+  Check, AlertTriangle, AlertCircle, Printer, ArrowLeft,
+  Eye, Folder, RotateCcw, Info
 } from 'lucide-react';
 import { useProducts, useCategories, useCustomers, useSales, Product } from '../services/DatabaseService';
 import { useAuth } from '../services/AuthContext';
@@ -19,8 +19,12 @@ import { broadcastSyncEvent } from '../services/SyncService';
 // Tipo de método de pago
 type PaymentMethod = 'Efectivo' | 'Tarjeta' | 'Transferencia';
 
-// Tipo para alerta
-type AlertType = 'success' | 'warning' | 'error' | 'info';
+interface Alert {
+  id: string;
+  type: 'success' | 'warning' | 'error' | 'info';
+  message: string;
+  timestamp: number;
+}
 
 // Tipo para ítem del carrito
 interface CartItem {
@@ -97,7 +101,7 @@ const Caja: React.FC = () => {
   const [discount, setDiscount] = useState<number>(0);
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('Efectivo');
   const [notes, setNotes] = useState<string>('');
-  const [alert, setAlert] = useState<{ type: AlertType; message: string } | null>(null);
+  const [alerts, setAlerts] = useState<Alert[]>([]);
   const [amountReceived, setAmountReceived] = useState<number>(0);
   const [previewMode, setPreviewMode] = useState<boolean>(false);
   const [previewSale, setPreviewSale] = useState<PreviewSale | null>(null);
@@ -113,7 +117,7 @@ const Caja: React.FC = () => {
     isOpen: false,
     title: '',
     message: '',
-    onConfirm: () => {},
+    onConfirm: () => { },
     type: 'warning' as 'warning' | 'danger' | 'info'
   });
 
@@ -124,20 +128,20 @@ const Caja: React.FC = () => {
         if (window.api?.getSettings) {
           const appSettings = await window.api.getSettings();
           console.log("Loaded settings:", appSettings);
-          
+
           // Verify configured printer
           if (window.api?.getPrinters) {
             const printers = await window.api.getPrinters();
             console.log("Detected printers:", printers.map(p => p.name));
             console.log("Configured printer:", appSettings.impresora_termica);
-            
+
             // Check if configured printer exists
             const printerExists = printers.some(p => p.name === appSettings.impresora_termica);
             if (appSettings.impresora_termica && !printerExists) {
               console.warn("⚠️ Configured printer not found among available printers");
             }
           }
-          
+
           setSettings({
             impresora_termica: appSettings.impresora_termica,
             guardar_pdf: appSettings.guardar_pdf,
@@ -151,19 +155,36 @@ const Caja: React.FC = () => {
         console.error('Error loading settings:', error);
       }
     };
-    
+
     loadSettings();
   }, []);
+
+  const showAlert = (alert: { type: 'success' | 'warning' | 'error' | 'info'; message: string }) => {
+    const uniqueId = `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+
+    const newAlert: Alert = {
+      id: uniqueId,
+      type: alert.type,
+      message: alert.message,
+      timestamp: Date.now()
+    };
+
+    setAlerts(prev => [...prev, newAlert]);
+
+    setTimeout(() => {
+      setAlerts(prev => prev.filter(alert => alert.id !== newAlert.id));
+    }, 5000);
+  };
 
   // Verificar estado de la impresora térmica
   const checkThermalPrinter = async () => {
     try {
       const status = await thermalPrintService.checkPrinterStatus();
       setPrinterStatus(status);
-      
+
       // Show alert if a thermal printer was found automatically
       if (status.available && status.message) {
-        setAlert({
+        showAlert({
           type: 'info',
           message: status.message
         });
@@ -181,7 +202,7 @@ const Caja: React.FC = () => {
 
         // Mostrar alerta si se detecta impresora térmica
         if (status.available && status.message) {
-          setAlert({
+          showAlert({
             type: 'info',
             message: status.message
           });
@@ -239,7 +260,7 @@ const Caja: React.FC = () => {
     // El descuento se aplica al monto total
     const finalTotal = subtotalWithTax - discount;
 
-    return { 
+    return {
       subtotalWithTax,
       subtotalWithoutTax,
       taxAmount,
@@ -262,9 +283,9 @@ const Caja: React.FC = () => {
     if (loadingProducts) return [];
 
     return products.filter(product => {
-      const matchesSearch = searchTerm 
+      const matchesSearch = searchTerm
         ? product.nombre.toLowerCase().includes(searchTerm.toLowerCase()) ||
-          (product.codigo_barra && product.codigo_barra.toLowerCase().includes(searchTerm.toLowerCase()))
+        (product.codigo_barra && product.codigo_barra.toLowerCase().includes(searchTerm.toLowerCase()))
         : true;
 
       const matchesCategory = categoryFilter === 'all' || product.categoria === categoryFilter;
@@ -281,8 +302,8 @@ const Caja: React.FC = () => {
     const isExempt = product.itebis === 0;
 
     // Calcular el precio sin ITBIS
-    const priceWithoutTax = isExempt 
-      ? product.precio_venta 
+    const priceWithoutTax = isExempt
+      ? product.precio_venta
       : product.precio_venta / (1 + product.itebis);
 
     // Calcular precio con ITBIS ya incluido (para productos no exentos)
@@ -326,11 +347,11 @@ const Caja: React.FC = () => {
       addToCart(product);
       setBarcodeInput('');
     } else {
-      setAlert({
-        type: 'warning', 
+      showAlert({
+        type: 'warning',
         message: `No existe un producto con el código ${barcodeInput}`
       });
-      setBarcodeInput(''); 
+      setBarcodeInput('');
     }
   };
 
@@ -352,7 +373,7 @@ const Caja: React.FC = () => {
     const product = products.find(p => p.id === item.product_id);
 
     if (product && newQuantity > product.stock) {
-      setAlert({
+      showAlert({
         type: 'warning',
         message: `Solo hay ${product.stock} unidades disponibles de ${product.nombre}`
       });
@@ -383,7 +404,7 @@ const Caja: React.FC = () => {
   // Generar vista previa de la factura
   const generatePreview = () => {
     if (cart.length === 0) {
-      setAlert({ type: 'warning', message: 'El carrito está vacío' });
+      showAlert({ type: 'warning', message: 'El carrito está vacío' });
       return;
     }
 
@@ -406,7 +427,7 @@ const Caja: React.FC = () => {
       usuario: user?.nombre || 'Usuario',
       monto_recibido: amountReceived,
       cambio: calculateChange,
-      detalles: cart.map(item => ({...item}))
+      detalles: cart.map(item => ({ ...item }))
     };
 
     setPreviewSale(preview);
@@ -416,7 +437,7 @@ const Caja: React.FC = () => {
   // Procesar venta
   const processSale = async () => {
     if (cart.length === 0) {
-      setAlert({ type: 'warning', message: 'El carrito está vacío' });
+      showAlert({ type: 'warning', message: 'El carrito está vacío' });
       return;
     }
 
@@ -503,7 +524,7 @@ const Caja: React.FC = () => {
               'Venta procesada con advertencias: ' +
               result.warnings[0];
           }
-          setAlert({ type: 'success', message: successMessage });
+          showAlert({ type: 'success', message: successMessage });
 
           // Construir previewSale usando previousCart
           const preview: PreviewSale = {
@@ -544,14 +565,14 @@ const Caja: React.FC = () => {
               const printResult = await thermalService.printReceipt(preview);
               if (!printResult.success) {
                 console.warn('Advertencia al imprimir:', printResult.message);
-                setAlert({
+                showAlert({
                   type: 'warning',
                   message: `Venta completada, pero hubo problemas al imprimir: ${printResult.message}`
                 });
               }
             } catch (printError) {
               console.error('Error al imprimir:', printError);
-              setAlert({
+              showAlert({
                 type: 'warning',
                 message: 'Venta completada, pero hubo un error al imprimir el recibo'
               });
@@ -562,11 +583,10 @@ const Caja: React.FC = () => {
           setTimeout(() => fetchProducts(), 1000);
         } catch (error) {
           console.error('Error al procesar venta:', error);
-          setAlert({
+          showAlert({
             type: 'error',
-            message: `Error al procesar la venta: ${
-              error instanceof Error ? error.message : 'Desconocido'
-            }`
+            message: `Error al procesar la venta: ${error instanceof Error ? error.message : 'Desconocido'
+              }`
           });
         } finally {
           setIsSubmitting(false);
@@ -574,6 +594,38 @@ const Caja: React.FC = () => {
       },
       'info'
     );
+  };
+
+  // Test thermal printer
+  const handleTestPrinter = async () => {
+    try {
+      setIsSubmitting(true);
+      const thermalService = ThermalPrintService.getInstance();
+
+      // Verify printer status first
+      const status = await thermalService.checkPrinterStatus();
+      if (!status.available) {
+        throw new Error(`No hay impresora disponible: ${status.message || 'Verifique conexión'}`);
+      }
+
+      console.log(`Probando impresora: ${status.printerName}`);
+      // Try to print a test page
+      const result = await thermalService.testPrinter();
+
+      if (result.success) {
+        showAlert({ type: 'success', message: 'Prueba de impresora exitosa' });
+      } else {
+        throw new Error(result.message);
+      }
+    } catch (error) {
+      console.error('Error en prueba de impresora:', error);
+      showAlert({
+        type: 'error',
+        message: `Error: ${error instanceof Error ? error.message : String(error)}`
+      });
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   // Regresar al home
@@ -616,25 +668,41 @@ const Caja: React.FC = () => {
   // Abrir carpeta de facturas
   const handleOpenPdfFolder = async () => {
     try {
+      const api = window.api;
+
       if (!settings?.ruta_pdf) {
-        setAlert({ type: 'warning', message: 'No hay una ruta configurada para las facturas' });
+        showAlert({ type: 'warning', message: 'No hay una ruta configurada para las facturas' });
         return;
       }
 
-      // En sistemas con electron, podemos abrir directamente la carpeta
-      if (window.api?.getAppPaths) {
-        const paths = await window.api.getAppPaths();
-        // Aquí se debería implementar una función para abrir la carpeta
-        // Esto normalmente se hace en el proceso principal de Electron
-        console.log('Abriendo carpeta:', settings.ruta_pdf);
+      if (!api) {
+        throw new Error("API no disponible");
+      }
 
-        // Esta es una solución alternativa ya que no hay una función directa en la API
-        // Se podría implementar una función específica en el preload.cjs
-        setAlert({ type: 'info', message: `Ruta de facturas: ${settings.ruta_pdf}` });
+      // Definir ruta de facturas
+      const facturaPath = settings.ruta_pdf;
+
+      // Asegurar que la carpeta existe antes de intentar abrirla
+      if (api.ensureDir) {
+        const dirResult = await api.ensureDir(facturaPath);
+        if (!dirResult.success) {
+          throw new Error(`No se pudo crear la carpeta: ${dirResult.error}`);
+        }
+      }
+
+      // Abrir la carpeta
+      if (api.openFolder) {
+        await api.openFolder(facturaPath);
+        showAlert({ type: 'success', message: 'Carpeta de facturas abierta correctamente' });
+      } else {
+        showAlert({ type: 'info', message: `Ruta de facturas: ${facturaPath}` });
       }
     } catch (error) {
       console.error('Error al abrir carpeta:', error);
-      setAlert({ type: 'error', message: 'No se pudo abrir la carpeta de facturas' });
+      showAlert({
+        type: 'error',
+        message: `No se pudo abrir la carpeta: ${error instanceof Error ? error.message : 'Error desconocido'}`
+      });
     }
   };
 
@@ -643,13 +711,13 @@ const Caja: React.FC = () => {
     // Si no hay factura seleccionada, pero hay productos en el carrito, crear una vista previa temporal
     if (!previewSale) {
       if (cart.length === 0) {
-        setAlert({
+        showAlert({
           type: 'error',
           message: 'No hay recibo para imprimir. Agregue productos al carrito primero.'
         });
         return;
       }
-      
+
       // Crear objeto de vista previa temporal para impresión
       const customer = customers.find(c => c.id === selectedCustomer);
       const customerName = customer ? customer.nombre : 'Cliente General';
@@ -668,7 +736,7 @@ const Caja: React.FC = () => {
         cambio: calculateChange,
         detalles: cart.map(item => ({ ...item }))
       };
-      
+
       setIsSubmitting(true);
       try {
         console.log('Imprimiendo recibo temporal...');
@@ -681,13 +749,13 @@ const Caja: React.FC = () => {
         console.log(`Imprimiendo en: ${status.printerName}`);
         const result = await thermalService.printReceipt(tempPreview);
         if (result.success) {
-          setAlert({ type: 'success', message: 'Borrador de recibo enviado a la impresora' });
+          showAlert({ type: 'success', message: 'Borrador de recibo enviado a la impresora' });
         } else {
           throw new Error(result.message || 'Error al imprimir');
         }
       } catch (err) {
         console.error('Error de impresión:', err);
-        setAlert({
+        showAlert({
           type: 'error',
           message: `Error de impresión: ${err instanceof Error ? err.message : String(err)}`
         });
@@ -697,7 +765,7 @@ const Caja: React.FC = () => {
           if (window.printerApi?.printRaw) {
             const simple = `\x1B@\x1Ba\x01WILPOS\n\nBORRADOR DE FACTURA\n\nTotal: ${total.toFixed(2)}\nFecha: ${new Date().toLocaleString()}\n\n\x1D\x56\x42\x00`;
             await window.printerApi.printRaw(simple, printerStatus?.printerName);
-            setAlert({ type: 'warning', message: 'Se envió un recibo simplificado a la impresora' });
+            showAlert({ type: 'warning', message: 'Se envió un recibo simplificado a la impresora' });
           }
         } catch (altErr) {
           console.error('Error en impresión alternativa:', altErr);
@@ -720,13 +788,13 @@ const Caja: React.FC = () => {
       console.log(`Imprimiendo en: ${status.printerName}`);
       const result = await thermalService.printReceipt(previewSale);
       if (result.success) {
-        setAlert({ type: 'success', message: 'Recibo enviado a la impresora térmica' });
+        showAlert({ type: 'success', message: 'Recibo enviado a la impresora térmica' });
       } else {
         throw new Error(result.message || 'Error al imprimir');
       }
     } catch (err) {
       console.error('Error de impresión:', err);
-      setAlert({
+      showAlert({
         type: 'error',
         message: `Error de impresión: ${err instanceof Error ? err.message : String(err)}`
       });
@@ -735,7 +803,7 @@ const Caja: React.FC = () => {
         if (window.printerApi?.printRaw) {
           const simple = `\x1B@\x1Ba\x01WILPOS\n\nFACTURA #${previewSale.id || 'N/A'}\n\nTotal: ${previewSale.total.toFixed(2)}\nFecha: ${new Date(previewSale.fecha_venta).toLocaleString()}\n\n\x1D\x56\x42\x00`;
           await window.printerApi.printRaw(simple, printerStatus?.printerName);
-          setAlert({ type: 'warning', message: 'Se envió un recibo simplificado a la impresora' });
+          showAlert({ type: 'warning', message: 'Se envió un recibo simplificado a la impresora' });
         }
       } catch (altErr) {
         console.error('Error en impresión alternativa:', altErr);
@@ -767,47 +835,47 @@ const Caja: React.FC = () => {
   }, [paymentMethod, total]);
 
   // Componente de Alerta
-  const Alert = ({ type, message }: { type: AlertType; message: string }) => {
+  const Alert: React.FC<{
+    alert: Alert;
+    onDismiss: (id: string) => void
+  }> = ({ alert, onDismiss }) => {
     const colors = {
       success: { bg: 'bg-green-50', text: 'text-green-800', border: 'border-green-200', icon: Check },
       warning: { bg: 'bg-yellow-50', text: 'text-yellow-800', border: 'border-yellow-200', icon: AlertTriangle },
       error: { bg: 'bg-red-50', text: 'text-red-800', border: 'border-red-200', icon: X },
-      info: { bg: 'bg-blue-50', text: 'text-blue-800', border: 'border-blue-200', icon: AlertCircle }
+      info: { bg: 'bg-blue-50', text: 'text-blue-800', border: 'border-blue-200', icon: Info }
     };
 
-    const style = colors[type] || colors.info;
+    const style = colors[alert.type];
     const Icon = style.icon;
 
     return (
-      <div className={`${style.bg} ${style.text} ${style.border} border p-4 rounded-lg flex items-start mb-4`}>
+      <div className={`${style.bg} ${style.text} ${style.border} border p-4 rounded-lg flex items-start mb-4 shadow-md animate-fadeIn`}>
         <Icon className="w-5 h-5 mr-2 mt-0.5 flex-shrink-0" />
-        <div className="flex-grow">{message}</div>
-        <button onClick={() => setAlert(null)} className="ml-2 flex-shrink-0">
+        <div className="flex-grow">{alert.message}</div>
+        <button
+          onClick={() => onDismiss(alert.id)}
+          className="ml-2 flex-shrink-0 hover:bg-opacity-20 hover:bg-gray-500 p-1 rounded-full"
+        >
           <X className="w-4 h-4" />
         </button>
       </div>
     );
   };
-
-  // Efecto para cerrar la alerta después de un tiempo
-  useEffect(() => {
-    if (alert) {
-      const timer = setTimeout(() => {
-        setAlert(null);
-      }, 5000);
-
-      return () => clearTimeout(timer);
-    }
-  }, [alert]);
-
   // Si estamos en modo vista previa, mostramos la factura
   if (previewMode && previewSale) {
     return (
       <div className="min-h-full bg-gray-50 flex flex-col">
         {/* Alerta */}
-        {alert && (
-          <div className="fixed top-6 right-6 z-50 max-w-md w-full">
-            <Alert type={alert.type} message={alert.message} />
+        {alerts.length > 0 && (
+          <div className="fixed top-6 right-6 z-50 max-w-md w-full space-y-2">
+            {alerts.map(alert => (
+              <Alert
+                key={alert.id}
+                alert={alert}
+                onDismiss={(id) => setAlerts(prev => prev.filter(alert => alert.id !== id))}
+              />
+            ))}
           </div>
         )}
 
@@ -823,7 +891,7 @@ const Caja: React.FC = () => {
             </div>
           </div>
           <div className="flex gap-2">
-            <button 
+            <button
               className="py-2 px-4 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors flex items-center gap-2"
               onClick={handlePrint}
               disabled={isSubmitting}
@@ -832,7 +900,7 @@ const Caja: React.FC = () => {
               <span>{isSubmitting ? 'Imprimiendo...' : 'Imprimir'}</span>
             </button>
             {settings.ruta_pdf && (
-              <button 
+              <button
                 className="py-2 px-4 bg-gray-600 hover:bg-gray-700 text-white rounded-lg transition-colors flex items-center gap-2"
                 onClick={handleOpenPdfFolder}
               >
@@ -841,7 +909,7 @@ const Caja: React.FC = () => {
               </button>
             )}
             {previewSale.estado === 'Pendiente' && (
-              <button 
+              <button
                 className="py-2 px-4 bg-green-600 hover:bg-green-700 text-white rounded-lg transition-colors flex items-center gap-2"
                 onClick={processSale}
               >
@@ -862,9 +930,9 @@ const Caja: React.FC = () => {
         </main>
 
         {/* Diálogo de confirmación */}
-        <ConfirmDialog 
+        <ConfirmDialog
           isOpen={confirmDialog.isOpen}
-          onClose={() => setConfirmDialog({...confirmDialog, isOpen: false})}
+          onClose={() => setConfirmDialog({ ...confirmDialog, isOpen: false })}
           onConfirm={confirmDialog.onConfirm}
           title={confirmDialog.title}
           message={confirmDialog.message}
@@ -877,9 +945,15 @@ const Caja: React.FC = () => {
   return (
     <div className="min-h-full bg-gray-50 flex flex-col">
       {/* Alerta */}
-      {alert && (
-        <div className="fixed top-6 right-6 z-50 max-w-md w-full">
-          <Alert type={alert.type} message={alert.message} />
+      {alerts.length > 0 && (
+        <div className="fixed top-6 right-6 z-50 max-w-md w-full space-y-2">
+          {alerts.map(alert => (
+            <Alert
+              key={alert.id}
+              alert={alert}
+              onDismiss={(id) => setAlerts(prev => prev.filter(alert => alert.id !== id))}
+            />
+          ))}
         </div>
       )}
 
@@ -893,27 +967,38 @@ const Caja: React.FC = () => {
             <ShoppingCart className="h-6 w-6 text-blue-600" />
             <h1 className="text-2xl font-bold text-gray-800">Punto de Venta</h1>
           </div>
-          
+
           {/* Printer status indicator */}
           <div className={`ml-4 flex items-center gap-2 py-1 px-3 rounded-full text-sm
-            ${printerStatus.available 
-              ? 'bg-green-50 text-green-700 border border-green-200' 
+            ${printerStatus.available
+              ? 'bg-green-50 text-green-700 border border-green-200'
               : 'bg-yellow-50 text-yellow-700 border border-yellow-200'}`}>
             <Printer className="h-3 w-3" />
             <span className="hidden sm:inline">
-              {printerStatus.available 
-                ? `Impresora: ${printerStatus.printerName || 'Térmica'}` 
+              {printerStatus.available
+                ? `Impresora: ${printerStatus.printerName || 'Térmica'}`
                 : 'No hay impresora térmica'}
             </span>
           </div>
-          
+
           {/* Refresh printer status button */}
-          <button 
+          <button
             onClick={checkThermalPrinter}
             className="ml-1 p-1 rounded text-gray-500 hover:bg-gray-100"
             title="Actualizar estado de impresora"
           >
             <RotateCcw className="h-3 w-3" />
+          </button>
+
+          {/* Test printer button */}
+          <button
+            onClick={handleTestPrinter}
+            className="ml-1 py-1 px-2 text-xs rounded bg-gray-100 hover:bg-gray-200 text-gray-700 flex items-center gap-1"
+            title="Probar impresora"
+            disabled={isSubmitting || !printerStatus.available}
+          >
+            <Printer className="h-3 w-3" />
+            <span>Probar</span>
           </button>
         </div>
       </header>
@@ -938,7 +1023,7 @@ const Caja: React.FC = () => {
             <div className="p-4 space-y-4">
               {/* Selector de cliente */}
               <div className="flex gap-2">
-                <select 
+                <select
                   className="w-full p-2 border border-gray-300 rounded-lg focus:border-blue-500 focus:ring-2 focus:ring-blue-200 transition-colors"
                   value={selectedCustomer}
                   onChange={(e) => setSelectedCustomer(parseInt(e.target.value))}
@@ -970,7 +1055,7 @@ const Caja: React.FC = () => {
                     onChange={(e) => setBarcodeInput(e.target.value)}
                   />
                 </div>
-                <button 
+                <button
                   type="submit"
                   className="py-2 px-4 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors"
                 >
@@ -995,7 +1080,7 @@ const Caja: React.FC = () => {
                             <div>
                               <span className="font-medium">{item.name}</span>
                             </div>
-                            <button 
+                            <button
                               className="text-gray-400 hover:text-red-500 transition-colors"
                               onClick={() => removeFromCart(index)}
                             >
@@ -1004,20 +1089,20 @@ const Caja: React.FC = () => {
                           </div>
                           <div className="flex items-center justify-between mt-2">
                             <div className="flex items-center gap-2">
-                              <button 
+                              <button
                                 className="w-7 h-7 flex items-center justify-center border rounded-full hover:bg-gray-100 transition-colors"
                                 onClick={() => updateQuantity(index, item.quantity - 1)}
                               >
                                 <Minus className="h-4 w-4" />
                               </button>
-                              <input 
-                                type="number" 
+                              <input
+                                type="number"
                                 value={item.quantity}
                                 onChange={(e) => updateQuantity(index, parseInt(e.target.value) || 1)}
                                 className="w-14 p-1 text-center border rounded focus:outline-none focus:ring-2 focus:ring-blue-200"
                                 min="1"
                               />
-                              <button 
+                              <button
                                 className="w-7 h-7 flex items-center justify-center border rounded-full hover:bg-gray-100 transition-colors"
                                 onClick={() => updateQuantity(index, item.quantity + 1)}
                               >
@@ -1049,12 +1134,12 @@ const Caja: React.FC = () => {
                 <div className="flex justify-between items-center">
                   <span className="text-gray-600">Descuento:</span>
                   <div className="flex items-center gap-2">
-                    <input 
-                      type="number" 
-                      className="w-24 p-1 border rounded text-right focus:outline-none focus:ring-2 focus:ring-blue-200" 
+                    <input
+                      type="number"
+                      className="w-24 p-1 border rounded text-right focus:outline-none focus:ring-2 focus:ring-blue-200"
                       placeholder="0.00"
                       min="0"
-                      max={subtotalWithTax} 
+                      max={subtotalWithTax}
                       value={discount}
                       onChange={(e) => {
                         const newDiscount = parseFloat(e.target.value) || 0;
@@ -1158,7 +1243,7 @@ const Caja: React.FC = () => {
                 {/* Botones de acción */}
                 <div className="grid grid-cols-2 gap-2">
                   {/* Botón de vista previa */}
-                  <button 
+                  <button
                     className="py-2 px-4 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-100 transition-colors flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                     onClick={generatePreview}
                     disabled={cart.length === 0}
@@ -1168,7 +1253,7 @@ const Caja: React.FC = () => {
                   </button>
 
                   {/* Botón de procesar */}
-                  <button 
+                  <button
                     className="py-2 px-4 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                     onClick={processSale}
                     disabled={cart.length === 0}
@@ -1188,15 +1273,15 @@ const Caja: React.FC = () => {
               <div className="flex flex-col sm:flex-row gap-3">
                 <div className="relative flex-1">
                   <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" />
-                  <input 
-                    type="text" 
-                    className="w-full p-2 pl-9 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-200 focus:border-blue-500" 
-                    placeholder="Buscar producto" 
+                  <input
+                    type="text"
+                    className="w-full p-2 pl-9 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-200 focus:border-blue-500"
+                    placeholder="Buscar producto"
                     value={searchTerm}
                     onChange={(e) => setSearchTerm(e.target.value)}
                   />
                 </div>
-                <select 
+                <select
                   className="sm:w-48 p-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-200 focus:border-blue-500"
                   value={categoryFilter}
                   onChange={(e) => setCategoryFilter(e.target.value)}
@@ -1231,7 +1316,7 @@ const Caja: React.FC = () => {
               ) : (
                 <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-4">
                   {filteredProducts.map((product) => (
-                    <div 
+                    <div
                       key={product.id}
                       className="shadow-md rounded-lg overflow-hidden hover:shadow-md transition-shadow cursor-pointer relative"
                       onClick={() => addToCart(product)}
@@ -1261,15 +1346,15 @@ const Caja: React.FC = () => {
                       )}
 
                       {/* Categoría con manejo de texto largo */}
-                      <Badge 
-                        variant="outline" 
+                      <Badge
+                        variant="outline"
                         className="absolute left-1 top-1 text-xs rounded-lg bg-blue-50 text-blue-700 border-blue-200 max-w-[calc(100%-45px)] overflow-hidden"
                       >
                         <span className="block truncate" title={product.categoria || "Sin categoría"}>
                           {product.categoria || "Sin categoría"}
                         </span>
                       </Badge>
-                      
+
                       <div className="p-3">
                         <h3 className="font-medium text-gray-800 truncate" title={product.nombre}>
                           {product.nombre}
@@ -1289,9 +1374,9 @@ const Caja: React.FC = () => {
       </main>
 
       {/* Diálogo de confirmación */}
-      <ConfirmDialog 
+      <ConfirmDialog
         isOpen={confirmDialog.isOpen}
-        onClose={() => setConfirmDialog({...confirmDialog, isOpen: false})}
+        onClose={() => setConfirmDialog({ ...confirmDialog, isOpen: false })}
         onConfirm={confirmDialog.onConfirm}
         title={confirmDialog.title}
         message={confirmDialog.message}

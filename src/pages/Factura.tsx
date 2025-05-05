@@ -1,22 +1,10 @@
 ﻿// src/pages/Factura.tsx - Improved invoice management component
 import React, { useState, useEffect, useRef } from 'react';
 import { 
-  Printer, 
-  Download, 
-  ChevronLeft, 
-  Search, 
-  Calendar, 
-  Filter, 
-  RotateCcw,
-  FileText,
-  Eye,
-  ArrowDown,
-  CheckCircle,
-  XCircle,
-  AlertTriangle,
-  X,
-  Check,
-  Folder
+  Printer, Download, ChevronLeft, Search, 
+  Filter, RotateCcw, FileText,
+  Eye, XCircle,
+  AlertTriangle, X, Check, Folder
 } from 'lucide-react';
 import { useAuth } from '../services/AuthContext';
 import { useSettings } from '../services/DatabaseService';
@@ -385,22 +373,38 @@ const Factura: React.FC = () => {
   // Abrir carpeta de PDFs
   const handleOpenPdfFolder = async () => {
     try {
+      const api = window.api;
+      
       if (!settings?.ruta_pdf) {
         showAlert('warning', 'No hay una ruta configurada para las facturas');
         return;
       }
+
+      if (!api) {
+        throw new Error("API no disponible");
+      }
       
-      // En sistemas con electron, podemos abrir directamente la carpeta
-      if (window.api?.getAppPaths) {
-        const paths = await window.api.getAppPaths();
-        // Si bien no tenemos una función directa para abrir la carpeta, podemos mostrar la ruta
-        // Idealmente, en una implementación completa, se agregaría una función para abrir la carpeta
-        showAlert('info', `Ruta de facturas: ${settings.ruta_pdf}`);
-        console.log('Ruta de facturas:', settings.ruta_pdf);
+      // Definir ruta de facturas
+      const facturaPath = settings.ruta_pdf;
+
+      // Asegurar que la carpeta existe antes de intentar abrirla
+      if (api.ensureDir) {
+        const dirResult = await api.ensureDir(facturaPath);
+        if (!dirResult.success) {
+          throw new Error(`No se pudo crear la carpeta: ${dirResult.error}`);
+        }
+      }
+
+      // Abrir la carpeta
+      if (api.openFolder) {
+        await api.openFolder(facturaPath);
+        showAlert('success', 'Carpeta de facturas abierta correctamente');
+      } else {
+        showAlert('info', `Ruta de facturas: ${facturaPath}`);
       }
     } catch (error) {
       console.error('Error al abrir carpeta:', error);
-      showAlert('error', 'No se pudo abrir la carpeta de facturas');
+      showAlert('error', `No se pudo abrir la carpeta: ${error instanceof Error ? error.message : 'Error desconocido'}`);
     }
   };
 

@@ -154,6 +154,10 @@ export interface Settings {
   tema?: string;
   tipo_impresora?: 'normal' | 'termica' | 'termica58'; 
   ultima_modificacion?: string;
+  printer_speed?: string; 
+  print_density?: string; 
+  auto_cut?: boolean;
+  open_cash_drawer?: boolean;
 }
 
 export interface InventoryMovement {
