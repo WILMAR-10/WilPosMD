@@ -1,7 +1,6 @@
 // src/services/ThermalPrintService.ts
 
 import type { PreviewSale } from '../types/sales';
-import { PrinterType } from '../types/printer';
 
 // Interface for printer status
 export interface PrinterStatus {
@@ -20,23 +19,14 @@ export interface PrintResult {
 
 /**
  * Service for managing thermal printer integration
- * Handles printer detection, connection, and printing operations
+ * Handles basic printing operations
  */
 export class ThermalPrintService {
   private static instance: ThermalPrintService;
   private _activePrinter: string | null = null;
-  private _paperWidth: '58mm' | '80mm' = '80mm';
-  private _printerType: PrinterType = PrinterType.THERMAL_80MM;
-  private _printSpeed: string = '220'; // Added property for print speed
-  private _printDensity: string = 'medium'; // Added property for print density
-  private _autoCut: boolean = true; // Added property for auto cut
-  private _openCashDrawer: boolean = false; // Added property for cash drawer
 
   // Private constructor for singleton
-  private constructor() {
-    // Initialize from saved settings if available
-    this.loadSettings();
-  }
+  private constructor() {}
 
   /**
    * Get the singleton instance
@@ -49,351 +39,27 @@ export class ThermalPrintService {
   }
 
   /**
-   * Get active printer name
-   */
-  public get activePrinter(): string | null {
-    return this._activePrinter;
-  }
-
-  /**
-   * Set active printer name
-   */
-  public set activePrinter(name: string | null) {
-    this._activePrinter = name;
-  }
-
-  /**
-   * Get paper width
-   */
-  public get paperWidth(): '58mm' | '80mm' {
-    return this._paperWidth;
-  }
-
-  /**
-   * Set paper width
-   */
-  public set paperWidth(width: '58mm' | '80mm') {
-    this._paperWidth = width;
-    // Update printer type based on width
-    this._printerType = width === '58mm' ? PrinterType.THERMAL_58MM : PrinterType.THERMAL_80MM;
-  }
-
-  /**
-   * Get print speed
-   */
-  public get printSpeed(): string {
-    return this._printSpeed;
-  }
-
-  /**
-   * Set print speed
-   */
-  public set printSpeed(speed: string) {
-    this._printSpeed = speed;
-  }
-
-  /**
-   * Get print density
-   */
-  public get printDensity(): string {
-    return this._printDensity;
-  }
-
-  /**
-   * Set print density
-   */
-  public set printDensity(density: string) {
-    this._printDensity = density;
-  }
-
-  /**
-   * Get auto cut setting
-   */
-  public get autoCut(): boolean {
-    return this._autoCut;
-  }
-
-  /**
-   * Set auto cut setting
-   */
-  public set autoCut(value: boolean) {
-    this._autoCut = value;
-  }
-
-  /**
-   * Get auto open cash drawer setting
-   */
-  public get autoOpenCashDrawer(): boolean {
-    return this._openCashDrawer;
-  }
-
-  /**
-   * Set auto open cash drawer setting
-   */
-  public set autoOpenCashDrawer(value: boolean) {
-    this._openCashDrawer = value;
-  }
-
-  /**
-   * Get printer type
-   */
-  public get printerType(): PrinterType {
-    return this._printerType;
-  }
-
-  /**
-   * Load printer settings from app settings
-   */
-  private async loadSettings(): Promise<void> {
-    try {
-      if (window.api?.getSettings) {
-        const settings = await window.api.getSettings();
-
-        if (settings) {
-          // Set printer from settings if available
-          if (settings.impresora_termica) {
-            this._activePrinter = settings.impresora_termica;
-          }
-
-          // Set printer type from settings
-          if (settings.tipo_impresora) {
-            if (settings.tipo_impresora === PrinterType.THERMAL_58MM) {
-              this._paperWidth = '58mm';
-              this._printerType = PrinterType.THERMAL_58MM;
-            } else if (settings.tipo_impresora === PrinterType.THERMAL_80MM) {
-              this._paperWidth = '80mm';
-              this._printerType = PrinterType.THERMAL_80MM;
-            }
-          }
-
-          // Set additional settings
-          if (settings.print_speed) {
-            this._printSpeed = settings.print_speed;
-          }
-          if (settings.print_density) {
-            this._printDensity = settings.print_density;
-          }
-          if (settings.auto_cut !== undefined) {
-            this._autoCut = settings.auto_cut;
-          }
-          if (settings.open_cash_drawer !== undefined) {
-            this._openCashDrawer = settings.open_cash_drawer;
-          }
-        }
-      }
-    } catch (error) {
-      console.error("Error loading printer settings:", error);
-    }
-  }
-
-  /**
-   * Save current printer settings
-   */
-  public async saveSettings(): Promise<boolean> {
-    try {
-      if (window.api?.getSettings && window.api?.saveSettings) {
-        const currentSettings = await window.api.getSettings();
-
-        // Update printer settings
-        const updatedSettings = {
-          ...currentSettings,
-          impresora_termica: this._activePrinter || undefined,
-          tipo_impresora: this._printerType,
-          print_speed: this._printSpeed,
-          print_density: this._printDensity,
-          auto_cut: this._autoCut,
-          open_cash_drawer: this._openCashDrawer
-        };
-
-        await window.api.saveSettings(updatedSettings);
-        return true;
-      }
-      return false;
-    } catch (error) {
-      console.error("Error saving printer settings:", error);
-      return false;
-    }
-  }
-
-  /**
-   * Check if thermal printer is available
-   * Attempts to detect and connect to thermal printer
-   */
-  public async checkPrinterStatus(): Promise<PrinterStatus> {
-    try {
-      // Get list of available printers
-      const printers = await this.getAvailablePrinters();
-
-      if (!printers || printers.length === 0) {
-        return {
-          available: false,
-          message: 'No printers detected'
-        };
-      }
-
-      // Look for thermal printers first
-      const thermalPrinters = printers.filter(p => p.isThermal);
-
-      // If active printer is set, check if it exists in the list
-      if (this._activePrinter) {
-        const activePrinterExists = printers.some(p => p.name === this._activePrinter);
-        if (activePrinterExists) {
-          // Active printer found in list
-          return {
-            available: true,
-            printerName: this._activePrinter,
-            message: `Using configured printer: ${this._activePrinter}`
-          };
-        } else {
-          // Active printer not found in list
-          console.warn(`Configured printer "${this._activePrinter}" not found`);
-          // Check if there are any thermal printers
-          if (thermalPrinters.length > 0) {
-            this._activePrinter = thermalPrinters[0].name;
-            return {
-              available: true,
-              printerName: this._activePrinter,
-              message: `Configured printer not found. Using: ${this._activePrinter}`
-            };
-          }
-        }
-      }
-
-      // No active printer set, try to find a thermal printer
-      if (thermalPrinters.length > 0) {
-        this._activePrinter = thermalPrinters[0].name;
-        return {
-          available: true,
-          printerName: this._activePrinter,
-          message: `Auto-detected thermal printer: ${this._activePrinter}`
-        };
-      }
-
-      // No thermal printers found, use default printer
-      const defaultPrinter = printers.find(p => p.isDefault);
-      if (defaultPrinter) {
-        // Use default printer, but indicate it may not be thermal
-        this._activePrinter = defaultPrinter.name;
-        return {
-          available: true,
-          printerName: this._activePrinter,
-          message: `No thermal printer found. Using default: ${this._activePrinter}`
-        };
-      }
-
-      // No suitable printer found
-      return {
-        available: false,
-        message: 'No suitable printer found'
-      };
-
-    } catch (error) {
-      console.error("Error checking printer status:", error);
-      return {
-        available: false,
-        error: error instanceof Error ? error.message : 'Unknown error checking printer'
-      };
-    }
-  }
-
-  /**
    * Get list of available printers
    */
   public async getAvailablePrinters(): Promise<Array<{
     name: string;
     isDefault?: boolean;
     description?: string;
-    isThermal?: boolean;
   }>> {
     try {
-      let printers: Array<{
-        name: string;
-        isDefault?: boolean;
-        description?: string;
-        isThermal?: boolean;
-      }> = [];
-
-      // Try window.printerApi first (new API)
+      // Use the unified printer API that connects to the main process
       if (window.printerApi?.getPrinters) {
         const result = await window.printerApi.getPrinters();
         if (result.success && result.printers) {
-          printers = result.printers;
+          return result.printers;
         }
       }
-      // Try window.api as fallback (legacy API)
-      else if (window.api?.getPrinters) {
-        printers = await window.api.getPrinters();
-      }
-
-      // Add isThermal flag based on name patterns if not already present
-      return printers.map(printer => ({
-        ...printer,
-        isThermal: printer.isThermal !== undefined ? printer.isThermal :
-          /thermal|receipt|pos|58mm|80mm|epson|tm-|tmt|epson/i.test(printer.name)
-      }));
+      
+      console.warn("Printer API not available, using empty printer list");
+      return [];
     } catch (error) {
       console.error("Error getting available printers:", error);
       return [];
-    }
-  }
-
-  /**
-   * Print a test page to verify printer configuration
-   */
-  public async testPrinter(printerName?: string): Promise<PrintResult> {
-    try {
-      const targetPrinter = printerName || this._activePrinter;
-
-      if (!targetPrinter) {
-        throw new Error('No printer selected');
-      }
-
-      // Generate simple test receipt
-      const testHtml = this.generateTestReceiptHtml();
-
-      // Use appropriate API based on availability
-      if (window.api?.testPrinter) {
-        // Direct API call if available
-        return await window.api.testPrinter(targetPrinter);
-      } else if (window.printerApi?.print) {
-        // Use print API
-        const result = await window.printerApi.print({
-          html: testHtml,
-          printerName: targetPrinter,
-          silent: true,
-          options: {
-            thermal: true,
-            paperWidth: this._paperWidth
-          }
-        });
-
-        if (result.success) {
-          return { success: true, message: 'Test page sent to printer' };
-        } else {
-          throw new Error(result.error || 'Unknown error printing test page');
-        }
-      } else if (window.api?.print) {
-        // Legacy API
-        const result = await window.api.print({
-          html: testHtml,
-          printerName: targetPrinter,
-          silent: true
-        });
-
-        if (result.success) {
-          return { success: true, message: 'Test page sent to printer' };
-        } else {
-          throw new Error(result.error || 'Unknown error printing test page');
-        }
-      } else {
-        throw new Error('No printing API available');
-      }
-    } catch (error) {
-      console.error("Error testing printer:", error);
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Unknown error testing printer'
-      };
     }
   }
 
@@ -402,11 +68,15 @@ export class ThermalPrintService {
    */
   public async printReceipt(sale: PreviewSale): Promise<PrintResult> {
     try {
-      // First check if printer is available
-      const status = await this.checkPrinterStatus();
-
-      if (!status.available) {
-        throw new Error(`No printer available: ${status.message || 'Printer not found'}`);
+      // Get available printers
+      const printers = await this.getAvailablePrinters();
+      
+      // Use default printer if available
+      const defaultPrinter = printers.find(p => p.isDefault);
+      const printerName = defaultPrinter?.name || (printers[0]?.name || null);
+      
+      if (!printerName) {
+        throw new Error('No printer available');
       }
 
       // Generate receipt HTML
@@ -417,11 +87,11 @@ export class ThermalPrintService {
         // New API
         const result = await window.printerApi.print({
           html: receiptHtml,
-          printerName: status.printerName,
+          printerName: printerName,
           silent: true,
           options: {
             thermal: true,
-            paperWidth: this._paperWidth
+            paperWidth: '80mm'
           }
         });
 
@@ -434,10 +104,10 @@ export class ThermalPrintService {
         // Legacy API
         const result = await window.api.printInvoice({
           html: receiptHtml,
-          printerName: status.printerName,
+          printerName: printerName,
           silent: true,
           options: {
-            paperWidth: this._paperWidth,
+            paperWidth: '80mm',
             thermal: true
           }
         });
@@ -464,25 +134,9 @@ export class ThermalPrintService {
    */
   private generateReceiptHtml(sale: PreviewSale): string {
     try {
-      // Get business info from settings
-      let businessName = 'WilPOS';
-      let address = '';
-      let phone = '';
-      let rnc = '';
-      let thankYouMessage = 'Gracias por su compra';
-
-      // Try to get settings if available
-      if (window.api?.getSettings) {
-        window.api.getSettings().then(settings => {
-          if (settings) {
-            businessName = settings.nombre_negocio || businessName;
-            address = settings.direccion || address;
-            phone = settings.telefono || phone;
-            rnc = settings.rnc || rnc;
-            thankYouMessage = settings.mensaje_recibo || thankYouMessage;
-          }
-        }).catch(err => console.error('Error loading settings:', err));
-      }
+      // Basic business info
+      const businessName = 'WilPOS';
+      const thankYouMessage = 'Gracias por su compra';
 
       // Formatting function
       const formatCurrency = (amount: number) => {
@@ -492,17 +146,12 @@ export class ThermalPrintService {
         }).format(amount);
       };
 
-      // Template varies slightly based on paper width
-      const isNarrow = this._paperWidth === '58mm';
-      const receiptWidth = isNarrow ? '56mm' : '76mm';
-      const fontSize = isNarrow ? '8pt' : '9pt';
-
       // Create details rows
       const detailRows = sale.detalles.map(item => {
         return `
           <tr>
             <td>${item.quantity}</td>
-            <td style="max-width: ${isNarrow ? '20mm' : '35mm'}; overflow: hidden; text-overflow: ellipsis;">
+            <td style="max-width: 35mm; overflow: hidden; text-overflow: ellipsis;">
               ${item.name}
               ${item.is_exempt ? ' (E)' : ''}
             </td>
@@ -522,14 +171,14 @@ export class ThermalPrintService {
           <style>
             @page {
               margin: 0;
-              size: ${this._paperWidth} auto;
+              size: 80mm auto;
             }
             body {
               font-family: 'Arial', sans-serif;
               margin: 0;
               padding: 5mm;
-              width: ${receiptWidth};
-              font-size: ${fontSize};
+              width: 76mm;
+              font-size: 9pt;
               line-height: 1.2;
             }
             .header {
@@ -537,12 +186,12 @@ export class ThermalPrintService {
               margin-bottom: 3mm;
             }
             .company {
-              font-size: ${isNarrow ? '10pt' : '12pt'};
+              font-size: 12pt;
               font-weight: bold;
               margin-bottom: 1mm;
             }
             .invoice-id {
-              font-size: ${isNarrow ? '9pt' : '10pt'};
+              font-size: 10pt;
               font-weight: bold;
               margin-bottom: 1mm;
             }
@@ -562,16 +211,13 @@ export class ThermalPrintService {
             th, td {
               text-align: left;
               padding: 1mm;
-              font-size: ${isNarrow ? '8pt' : '9pt'};
+              font-size: 9pt;
             }
             th {
               font-weight: bold;
             }
             .right {
               text-align: right;
-            }
-            .center {
-              text-align: center;
             }
             .total-row {
               display: flex;
@@ -580,14 +226,14 @@ export class ThermalPrintService {
             }
             .grand-total {
               font-weight: bold;
-              font-size: ${isNarrow ? '10pt' : '12pt'};
+              font-size: 12pt;
               margin: 2mm 0;
               border-top: 1px solid #000;
               padding-top: 2mm;
             }
             .footer {
               text-align: center;
-              font-size: ${isNarrow ? '8pt' : '9pt'};
+              font-size: 9pt;
               margin-top: 5mm;
               border-top: 1px dashed #000;
               padding-top: 2mm;
@@ -598,9 +244,6 @@ export class ThermalPrintService {
           <!-- Header Section -->
           <div class="header">
             <div class="company">${businessName}</div>
-            ${address ? `<div>${address}</div>` : ''}
-            ${phone ? `<div>Tel: ${phone}</div>` : ''}
-            ${rnc ? `<div>RNC: ${rnc}</div>` : ''}
             <div class="invoice-id">Factura #${sale.id || 'N/A'}</div>
             <div>Fecha: ${new Date(sale.fecha_venta).toLocaleString()}</div>
             <div>Cliente: ${sale.cliente || 'Cliente General'}</div>
@@ -714,144 +357,6 @@ export class ThermalPrintService {
         </html>
       `;
     }
-  }
-
-  /**
-   * Generate HTML for test receipt
-   */
-  private generateTestReceiptHtml(): string {
-    const timestamp = new Date().toLocaleString();
-    const printerInfo = this._activePrinter 
-      ? `Impresora: ${this._activePrinter}` 
-      : 'Impresora: Predeterminada';
-
-    return `
-      <!DOCTYPE html>
-      <html>
-      <head>
-        <meta charset="UTF-8">
-        <title>Prueba de Impresión</title>
-        <style>
-          @page {
-            margin: 0;
-            size: ${this._paperWidth} auto;
-          }
-          body {
-            font-family: 'Arial', sans-serif;
-            margin: 0;
-            padding: 5mm;
-            width: ${this._paperWidth === '58mm' ? '56mm' : '76mm'};
-            font-size: ${this._paperWidth === '58mm' ? '8pt' : '9pt'};
-            line-height: 1.2;
-          }
-          .header {
-            text-align: center;
-            margin-bottom: 5mm;
-          }
-          .title {
-            font-size: 14pt;
-            font-weight: bold;
-            margin-bottom: 2mm;
-          }
-          .content {
-            margin: 5mm 0;
-          }
-          .border-section {
-            border-top: 1px dashed #000;
-            border-bottom: 1px dashed #000;
-            padding: 2mm 0;
-            margin: 2mm 0;
-            text-align: center;
-          }
-          .footer {
-            text-align: center;
-            margin-top: 5mm;
-            font-size: 8pt;
-          }
-        </style>
-      </head>
-      <body>
-        <div class="header">
-          <div class="title">WILPOS</div>
-          <div>Sistema de Punto de Venta</div>
-        </div>
-        
-        <div class="border-section">
-          PÁGINA DE PRUEBA
-        </div>
-        
-        <div class="content">
-          <p>${printerInfo}</p>
-          <p>Ancho: ${this._paperWidth}</p>
-          <p>Fecha: ${timestamp}</p>
-        </div>
-        
-        <div class="border-section">
-          PRUEBA DE CARACTERES
-        </div>
-        
-        <div class="content">
-          <p>ABCDEFGHIJKLMNÑOPQRSTUVWXYZ</p>
-          <p>abcdefghijklmnñopqrstuvwxyz</p>
-          <p>1234567890</p>
-          <p>!@#$%^&*()_+-=[]{}|;':,./<>?</p>
-        </div>
-        
-        <div class="footer">
-          <p>WilPOS - Página de prueba</p>
-          <p>${timestamp}</p>
-        </div>
-      </body>
-      </html>
-    `;
-  }
-
-  /**
-   * Print raw text to printer
-   * Useful for sending ESC/POS commands directly
-   */
-  public async printRawText(text: string, printerName?: string): Promise<PrintResult> {
-    try {
-      const targetPrinter = printerName || this._activePrinter;
-
-      if (!targetPrinter) {
-        throw new Error('No printer selected');
-      }
-
-      // Use appropriate API based on availability
-      if (window.printerApi?.printRaw) {
-        return await window.printerApi.printRaw(text, targetPrinter);
-      } else if (window.api?.printRaw) {
-        return await window.api.printRaw(text, targetPrinter);
-      } else {
-        throw new Error('Raw printing API not available');
-      }
-    } catch (error) {
-      console.error("Error printing raw text:", error);
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Unknown error printing raw text'
-      };
-    }
-  }
-
-  /**
-   * Send specific ESC/POS command to printer
-   * @param command ESC/POS command as string
-   * @param printerName Optional printer name
-   */
-  public async sendEscposCommand(command: string, printerName?: string): Promise<PrintResult> {
-    return this.printRawText(command, printerName);
-  }
-
-  /**
-   * Open cash drawer using ESC/POS command
-   * Works with most ESC/POS compatible printers
-   */
-  public async openCashDrawer(printerName?: string): Promise<PrintResult> {
-    // Standard ESC/POS command to open cash drawer
-    const command = '\x1B\x70\x00\x19\x19'; // ESC p 0 25 25
-    return this.sendEscposCommand(command, printerName);
   }
 }
 

@@ -147,18 +147,30 @@ contextBridge.exposeInMainWorld('printerApi', {
       };
     }
   },
-  print: opts => {
+  // Standard printer function for regular printing
+  print: (options) => {
     try {
-      return ipcRenderer.invoke('print', opts)
+      return ipcRenderer.invoke('print', options)
         .catch(err => ({ success: false, error: err.message || 'Unknown error' }));
     } catch (error) {
       console.error('Print error:', error);
       return Promise.resolve({ success: false, error: error.message || 'Unknown error' });
     }
   },
-  savePdf: opts => {
+  // Function for ESC/POS commands to thermal printers
+  sendRawCommandsToPrinter: (commands, printerName) => {
     try {
-      return ipcRenderer.invoke('save-pdf', opts)
+      return ipcRenderer.invoke('print-raw', { texto: commands, printerName })
+        .catch(err => ({ success: false, error: err.message || 'Unknown error' }));
+    } catch (error) {
+      console.error('Raw printing error:', error);
+      return Promise.resolve({ success: false, error: error.message || 'Unknown error' });
+    }
+  },
+  // PDF-related functions
+  savePdf: (options) => {
+    try {
+      return ipcRenderer.invoke('save-pdf', options)
         .catch(err => ({ success: false, error: err.message || 'Unknown error' }));
     } catch (error) {
       console.error('Save PDF error:', error);
@@ -172,26 +184,5 @@ contextBridge.exposeInMainWorld('printerApi', {
       console.error('Get PDF path error:', error);
       return Promise.resolve(null);
     }
-  },
-  printRaw: (text, printerName) => {
-    try {
-      return ipcRenderer.invoke('print-raw', { texto: text, printerName })
-        .catch(err => ({ success: false, error: err.message || 'Unknown error' }));
-    } catch (error) {
-      console.error('Print raw error:', error);
-      return Promise.resolve({ success: false, error: error.message || 'Unknown error' });
-    }
-  },
-  
-  // This was commented out in your code, but should be enabled if needed
-  print: opts => {
-    try {
-      return ipcRenderer.invoke('print', opts)
-        .catch(err => ({ success: false, error: err.message || 'Unknown error' }));
-    } catch (error) {
-      console.error('Print error:', error);
-      return Promise.resolve({ success: false, error: error.message || 'Unknown error' });
-    }
   }
-
 });

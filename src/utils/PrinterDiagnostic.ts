@@ -165,15 +165,13 @@ export class PrinterDiagnostic {
         info.platform = navigator.platform;
       }
       
-      // Try to get app settings
-      if (window.api?.getSettings) {
-        const settings = await window.api.getSettings();
-        if (settings) {
-          // Don't include sensitive info
-          info.appSettings = {
-            printerConfig: !!settings.impresora_termica,
-            printerType: settings.tipo_impresora,
-            hasPdfPath: !!settings.ruta_pdf
+      // Get basic app information only - printer info collected elsewhere
+      if (window.api?.getAppPaths) {
+        const paths = await window.api.getAppPaths();
+        if (paths) {
+          info.appPaths = {
+            userData: paths.userData,
+            appPath: paths.appPath
           };
         }
       }

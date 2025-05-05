@@ -9,29 +9,6 @@ import { load } from 'cheerio';
 // Use createRequire for CommonJS modules
 const require = createRequire(import.meta.url);
 
-// Import node-thermal-printer with error handling
-let ThermalPrinter, PrinterTypes, CharacterSet, BreakLine;
-try {
-  const thermPrinter = require('node-thermal-printer');
-  ThermalPrinter = thermPrinter.printer;
-  PrinterTypes = thermPrinter.types;
-  CharacterSet = thermPrinter.characterSets;
-  BreakLine = thermPrinter.BreakLine;
-  console.log("Successfully imported node-thermal-printer");
-} catch (error) {
-  console.error("Failed to import node-thermal-printer:", error);
-  // Fallback
-  ThermalPrinter = class {
-    constructor() {}
-    async isPrinterConnected() { return false; }
-    write() {}
-    async execute() { return false; }
-  };
-  PrinterTypes = { EPSON: 'epson', STAR: 'star' };
-  CharacterSet = { PC850_MULTILINGUAL: 'pc850_multilingual' };
-  BreakLine = { WORD: 'word' };
-}
-
 // Import database functions from your module
 import {
   initializeDatabase, 
@@ -267,6 +244,89 @@ function createMainWindow() {
   }
 }
 
+/**
+ * Obtiene impresoras disponibles y filtra las desconectadas.
+ */
+async function getSystemPrinters() {
+  try {
+    const win = BrowserWindow.getAllWindows().find(w => !w.isDestroyed());
+    if (win && typeof win.webContents.getPrinters === 'function') {
+      const printers = win.webContents.getPrinters();
+      const available = printers.filter(p => p.status === 0 || p.status === 3);
+      return {
+        success: true,
+        printers: available.map(p => ({
+          name: p.name,
+          description: p.description || '',
+          status: p.status,
+          isDefault: p.isDefault,
+          isThermal: /thermal|receipt|80mm|58mm|epson|pos/i.test(p.name.toLowerCase())
+        }))
+      };
+    }
+    return { success: false, printers: [], error: 'No printers found' };
+  } catch (error) {
+    console.error('Error getting printers:', error);
+    return { success: false, printers: [], error: error.message || 'Unknown error' };
+  }
+}
+
+/**
+ * Envía comandos ESC/POS crudos creando una ventana oculta.
+ */
+async function sendRawCommandsToPrinter(printerName, commands) {
+  try {
+    if (!printerName) throw new Error('Printer name is required');
+    const win = new BrowserWindow({ show: false, webPreferences: { contextIsolation: true } });
+    const html = `
+      <!DOCTYPE html><html><head><meta charset="UTF-8"><title>ESC/POS</title>
+      <style>body{margin:0;padding:0;font-family:monospace;}pre{margin:0;white-space:pre;font-size:0;}</style>
+      </head><body><pre>${commands}</pre></body></html>
+    `;
+    await win.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html));
+    const result = await win.webContents.print({
+      silent: true, printBackground: false,
+      deviceName: printerName, margins: { marginType: 'none' }
+    });
+    win.close();
+    return { success: result, message: result ? 'Commands sent successfully' : 'Failed to send commands' };
+  } catch (error) {
+    console.error('Error sending raw commands:', error);
+    return { success: false, error: error.message || 'Unknown error' };
+  }
+}
+
+/**
+ * Prueba simple de impresora ESC/POS.
+ */
+async function testPrinter(printerName) {
+  if (!printerName) return { success: false, error: 'Printer name required' };
+  try {
+    const testCommands =
+      '\x1B@WILPOS Test Page\n\nDate: ' +
+      new Date().toLocaleString() +
+      '\n\nIf you can read this, your printer is working!\n\n\n\n\x1DV\x00';
+    return await sendRawCommandsToPrinter(printerName, testCommands);
+  } catch (error) {
+    console.error('Error testing printer:', error);
+    return { success: false, error: error.message };
+  }
+}
+
+/**
+ * Abre el cajón de efectivo vía ESC/POS.
+ */
+async function openCashDrawer(printerName) {
+  if (!printerName) return { success: false, error: 'Printer name required' };
+  try {
+    const drawerCmd = '\x1B\x70\x00\x19\x19';
+    return await sendRawCommandsToPrinter(printerName, drawerCmd);
+  } catch (error) {
+    console.error('Error opening cash drawer:', error);
+    return { success: false, error: error.message };
+  }
+}
+
 // =====================================================
 // Unified handler setup
 // =====================================================
@@ -316,118 +376,6 @@ function setupAllHandlers(ipcMain, app) {
     const dir = path.join(app.getPath('documents'), 'WilPOS', 'Facturas');
     await fs.ensureDir(dir);
     return dir;
-  });
-
-  // Impresión de texto RAW para impresoras ESC/POS
-  safeRegister('print-raw', async (_, { texto, printerName }) => {
-    console.log(`Impresión RAW solicitada para: ${printerName || 'Impresora predeterminada'}`);
-    try {
-      if (!printerName) {
-        throw new Error('Se requiere un nombre de impresora');
-      }
-      // Crear ventana oculta para impresión
-      const win = new BrowserWindow({
-        show: false,
-        webPreferences: { contextIsolation: true, sandbox: false }
-      });
-
-      // Construir HTML con texto plano
-      const htmlContent = `
-        <!DOCTYPE html>
-        <html>
-        <head>
-          <meta charset="UTF-8">
-          <title>Print Raw</title>
-          <style>
-            @page { margin: 0; size: 80mm auto; }
-            body {
-              font-family: monospace;
-              white-space: pre;
-              font-size: 9pt;
-              width: 72mm;
-              margin: 0;
-              padding: 0;
-            }
-          </style>
-        </head>
-        <body>${texto.replace(/[\x00-\x1F]/g, '')}</body>
-        </html>
-      `;
-      await win.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(htmlContent));
-
-      // Enviar a impresora
-      const result = await win.webContents.print({
-        silent: true,
-        printBackground: true,
-        deviceName: printerName,
-        margins: { marginType: 'none' },
-        pageSize: { width: 80000, height: 210000 }
-      });
-
-      win.close();
-      return {
-        success: result,
-        message: result ? 'Impresión enviada correctamente' : 'Error al enviar a impresora'
-      };
-    } catch (error) {
-      console.error('Error en impresión RAW:', error);
-      return {
-        success: false,
-        error: `Fallo de impresión: ${error.message || 'Error desconocido'}`
-      };
-    }
-  });
-
-  // Impresión directa de comandos RAW para impresoras térmicas ESC/POS
-  safeRegister('printer:print-raw', async (_, commands, printerName) => {
-    console.log(`Recibida petición de impresión RAW para ${printerName}`);
-    console.log(`Tamaño comandos: ${commands.length} bytes`);
-    
-    try {
-      // Crear instancia de impresora térmica
-      const printer = new ThermalPrinter({
-        type: PrinterTypes.EPSON,
-        interface: `printer:${printerName}`,
-        driver: require('printer'),
-        options: {
-          timeout: 5000
-        },
-        characterSet: CharacterSet.PC850_MULTILINGUAL
-      });
-      
-      // Verificar conectividad
-      const isConnected = await printer.isPrinterConnected();
-      if (!isConnected) {
-        console.error(`La impresora ${printerName} no está conectada`);
-        return { 
-          success: false, 
-          error: `La impresora ${printerName} no está conectada` 
-        };
-      }
-      
-      // Enviar datos RAW directamente a la impresora
-      printer.write(Buffer.from(commands));
-      
-      // Ejecutar comando de impresión
-      await printer.execute();
-      
-      console.log(`Comandos RAW enviados exitosamente a ${printerName}`);
-      return { 
-        success: true, 
-        message: `Impresión enviada a ${printerName}` 
-      };
-    } catch (error) {
-      console.error('Error al imprimir comandos RAW:', error);
-      return { 
-        success: false, 
-        error: error.message || 'Error desconocido al imprimir'
-      };
-    }
-  });
-  
-  // Alias para compatibilidad con versiones anteriores (sin prefijo 'printer:')
-  safeRegister('print-raw', async (_, commands, printerName) => {
-    return ipcMain.handle('printer:print-raw', commands, printerName);
   });
 
   // Prueba de conectividad de impresora
@@ -499,53 +447,6 @@ function setupAllHandlers(ipcMain, app) {
 }
 
 // =====================================================
-// Enhance Electron Print Handlers
-// =====================================================
-function enhanceElectronPrintHandlers() {
-  // Prevent duplicate registration
-  try { ipcMain.removeHandler('get-printers') } catch (e) {}
-
-  ipcMain.handle('get-printers', async () => {
-    try {
-      // 1) try thermal-printer.js
-      const fromModule = await getPrinters();
-      if (fromModule?.printers) return fromModule;
-
-      // 2) try webContents.getPrinters()
-      const win = BrowserWindow.getAllWindows().find(w => !w.isDestroyed());
-      if (win && typeof win.webContents.getPrinters === 'function') {
-        const list = win.webContents.getPrinters();
-        return {
-          success: true,
-          printers: list.map(p => ({
-            name: p.name,
-            description: p.description || '',
-            status: p.status,
-            isDefault: p.isDefault,
-            isThermal: /thermal|receipt|80mm|58mm|epson|pos/i.test(p.name.toLowerCase())
-          }))
-        };
-      }
-
-      // 3) fallback
-      return {
-        success: true,
-        printers: [
-          { name: 'Microsoft Print to PDF', isDefault: true, isThermal: false },
-          { name: 'POS-80', isDefault: false, isThermal: true }
-        ]
-      };
-    } catch (error) {
-      console.error('get-printers final error:', error);
-      return {
-        success: true,
-        printers: [{ name: 'Microsoft Print to PDF', isDefault: true, isThermal: false }]
-      };
-    }
-  });
-}
-
-// =====================================================
 // Application Lifecycle
 // =====================================================
 app.whenReady().then(async () => {
@@ -558,11 +459,8 @@ app.whenReady().then(async () => {
     setupIpcHandlers();
     setupWindowControls();
 
-    // Use unified handler setup instead of setupThermalPrintingHandlers
+    // Use unified handler setup en lugar de setupThermalPrintingHandlers
     setupAllHandlers(ipcMain, app);
-
-    // Enhance Electron print handlers
-    enhanceElectronPrintHandlers();
 
     createMainWindow();
 

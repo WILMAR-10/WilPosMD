@@ -16,7 +16,6 @@ import ThermalPrintService from '../services/ThermalPrintService';
 import { PrinterType } from '../types/printer';
 
 // Define types
-// Define types
 interface Printer {
   name: string;
   description?: string;
@@ -29,11 +28,6 @@ interface PrinterOption {
   value: string;
   label: string;
   isThermal?: boolean;
-}
-
-interface PrintSpeed {
-  value: string;
-  label: string;
 }
 
 type AlertType = 'success' | 'warning' | 'error' | 'info';
@@ -59,8 +53,6 @@ const Configuracion: React.FC = () => {
     guardar_pdf: true,
     ruta_pdf: '',
     tipo_impresora: settings?.tipo_impresora || 'normal',
-    printer_speed: settings?.printer_speed || '220',
-    print_density: settings?.print_density || 'medium',
     auto_cut: settings?.auto_cut !== false, // default to true
     open_cash_drawer: settings?.open_cash_drawer || false,
   });
@@ -83,20 +75,6 @@ const Configuracion: React.FC = () => {
     success?: boolean;
     message?: string;
   }>({ testing: false });
-  
-  // Opciones de velocidad de impresión basadas en el manual
-  const printSpeedOptions: PrintSpeed[] = [
-    { value: "150", label: "150 mm/s" },
-    { value: "200", label: "200 mm/s" },
-    { value: "220", label: "220 mm/s (Máxima)" }
-  ];
-  
-  // Opciones de densidad de impresión
-  const printDensityOptions = [
-    { value: "low", label: "Baja" },
-    { value: "medium", label: "Media" },
-    { value: "high", label: "Alta" }
-  ];
   
   // Diálogo de confirmación
   const [confirmDialog, setConfirmDialog] = useState({
@@ -133,8 +111,6 @@ const Configuracion: React.FC = () => {
             guardar_pdf: settings.guardar_pdf !== undefined ? settings.guardar_pdf : true,
             ruta_pdf: settings.ruta_pdf || '', 
             tipo_impresora: settings.tipo_impresora || 'normal',
-            printer_speed: settings.printer_speed || '220',
-            print_density: settings.print_density || 'medium',
             auto_cut: settings.auto_cut !== false, // default to true
             open_cash_drawer: settings.open_cash_drawer || false,
           });
@@ -226,22 +202,13 @@ const Configuracion: React.FC = () => {
         const thermalPrintService = ThermalPrintService.getInstance();
         
         // Configurar el ancho del papel según el tipo de impresora
-        if (formData.tipo_impresora === 'termica58') {
-          thermalPrintService.paperWidth = '58mm';
-        } else {
+        if (formData.tipo_impresora === 'termica') {
           thermalPrintService.paperWidth = '80mm';
         }
         
         // Configurar la impresora activa
         if (formData.impresora_termica) {
           thermalPrintService.activePrinter = formData.impresora_termica;
-        }
-        
-        // Guardar la configuración (opcional, solo si hay cambios)
-        if (formData.impresora_termica !== thermalPrintService.activePrinter || 
-            (formData.tipo_impresora === 'termica58' && thermalPrintService.paperWidth !== '58mm') ||
-            (formData.tipo_impresora === 'termica' && thermalPrintService.paperWidth !== '80mm')) {
-          thermalPrintService.saveSettings();
         }
       }
     } catch (error) {
@@ -348,9 +315,7 @@ const Configuracion: React.FC = () => {
         const thermalPrintService = ThermalPrintService.getInstance();
         
         // Configurar el ancho del papel según el tipo de impresora
-        if (updatedSettings.tipo_impresora === 'termica58') {
-          thermalPrintService.paperWidth = '58mm';
-        } else if (updatedSettings.tipo_impresora === 'termica') {
+        if (updatedSettings.tipo_impresora === 'termica') {
           thermalPrintService.paperWidth = '80mm';
         }
         
@@ -360,8 +325,6 @@ const Configuracion: React.FC = () => {
         }
         
         // Configurar opciones adicionales en el servicio
-        thermalPrintService.printSpeed = updatedSettings.printer_speed || '220';
-        thermalPrintService.printDensity = updatedSettings.print_density || 'medium';
         thermalPrintService.autoCut = updatedSettings.auto_cut !== false;
         thermalPrintService.autoOpenCashDrawer = updatedSettings.open_cash_drawer || false;
         
@@ -525,7 +488,7 @@ const Configuracion: React.FC = () => {
       const thermalPrintService = ThermalPrintService.getInstance();
       
       // Configurar el tipo de impresora según la selección
-      thermalPrintService.paperWidth = formData.tipo_impresora === 'termica58' ? '58mm' : '80mm';
+      thermalPrintService.paperWidth = '80mm';
       
       // Intentar imprimir página de prueba
       const result = await thermalPrintService.testPrinter(formData.impresora_termica);
@@ -910,112 +873,57 @@ const Configuracion: React.FC = () => {
                 </div>
               )}
             
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
-                <div>
-                  <label htmlFor="tipo_impresora" className="block text-sm font-medium text-gray-700 mb-1">
-                    Tipo de Impresora
-                  </label>
-                  <div className="relative">
-                    <Printer className="absolute left-3 top-3 text-gray-400 h-4 w-4" />
-                    <select
-                      id="tipo_impresora"
-                      name="tipo_impresora"
-                      className="pl-10 w-full p-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                      value={formData.tipo_impresora}
-                      onChange={handleChange}
-                      disabled={!canConfigurePrinter}
-                    >
-                      <option value="normal">Impresora Estándar</option>
-                      <option value="termica">Impresora Térmica 80mm</option>
-                      <option value="termica58">Impresora Térmica 58mm</option>
-                    </select>
-                  </div>
-                  <p className="text-xs text-gray-500 mt-1">
-                    Seleccione el tipo de impresora para los recibos. Las impresoras térmicas SPRT-POS891 soportan ancho de 80mm.
-                  </p>
-                </div>
-                
-                <div>
-                  <label htmlFor="printer_speed" className="block text-sm font-medium text-gray-700 mb-1">
-                    Velocidad de Impresión
-                  </label>
+              <div>
+                <label htmlFor="tipo_impresora" className="block text-sm font-medium text-gray-700 mb-1">
+                  Tipo de Impresora
+                </label>
+                <div className="relative">
+                  <Printer className="absolute left-3 top-3 text-gray-400 h-4 w-4" />
                   <select
-                    id="printer_speed"
-                    name="printer_speed"
-                    className="w-full p-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    value={formData.printer_speed || '220'}
+                    id="tipo_impresora"
+                    name="tipo_impresora"
+                    className="pl-10 w-full p-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    value={formData.tipo_impresora}
                     onChange={handleChange}
-                    disabled={!canConfigurePrinter || formData.tipo_impresora === 'normal'}
+                    disabled={!canConfigurePrinter}
                   >
-                    {printSpeedOptions.map(option => (
-                      <option key={option.value} value={option.value}>
-                        {option.label}
-                      </option>
-                    ))}
+                    <option value="normal">Impresora Estándar</option>
+                    <option value="termica">Impresora Térmica</option>
                   </select>
-                  <p className="text-xs text-gray-500 mt-1">
-                    Solo aplicable para impresoras térmicas. La velocidad máxima recomendada es 220mm/s.
-                  </p>
                 </div>
+                <p className="text-xs text-gray-500 mt-1">
+                  Seleccione el tipo de impresora para los recibos.
+                </p>
               </div>
               
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
-                <div>
-                  <label htmlFor="print_density" className="block text-sm font-medium text-gray-700 mb-1">
-                    Densidad de Impresión
-                  </label>
-                  <select
-                    id="print_density"
-                    name="print_density"
-                    className="w-full p-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    value={formData.print_density || 'medium'}
-                    onChange={handleChange}
+              <div className="mt-4">
+                <label className="flex items-center space-x-3 mb-4">
+                  <input
+                    type="checkbox"
+                    name="auto_cut"
+                    checked={formData.auto_cut !== false}
+                    onChange={(e) => setFormData({...formData, auto_cut: e.target.checked})}
+                    className="form-checkbox h-5 w-5 text-blue-600"
                     disabled={!canConfigurePrinter || formData.tipo_impresora === 'normal'}
-                  >
-                    {printDensityOptions.map(option => (
-                      <option key={option.value} value={option.value}>
-                        {option.label}
-                      </option>
-                    ))}
-                  </select>
-                  <p className="text-xs text-gray-500 mt-1">
-                    Ajusta la oscuridad de la impresión. Mayor densidad consume más batería y puede reducir la vida útil del cabezal.
-                  </p>
-                </div>
+                  />
+                  <span className={!canConfigurePrinter || formData.tipo_impresora === 'normal' ? 'text-gray-400' : ''}>
+                    Corte automático de papel
+                  </span>
+                </label>
                 
-                <div>
-                  <label className="flex items-center space-x-3 mb-4">
-                    <input
-                      type="checkbox"
-                      name="auto_cut"
-                      checked={formData.auto_cut !== false}
-                      onChange={(e) => setFormData({...formData, auto_cut: e.target.checked})}
-                      className="form-checkbox h-5 w-5 text-blue-600"
-                      disabled={!canConfigurePrinter || formData.tipo_impresora === 'normal'}
-                    />
-                    <span className={!canConfigurePrinter || formData.tipo_impresora === 'normal' ? 'text-gray-400' : ''}>
-                      Corte automático de papel
-                    </span>
-                  </label>
-                  
-                  <label className="flex items-center space-x-3">
-                    <input
-                      type="checkbox"
-                      name="open_cash_drawer"
-                      checked={formData.open_cash_drawer === true}
-                      onChange={(e) => setFormData({...formData, open_cash_drawer: e.target.checked})}
-                      className="form-checkbox h-5 w-5 text-blue-600"
-                      disabled={!canConfigurePrinter || formData.tipo_impresora === 'normal'}
-                    />
-                    <span className={!canConfigurePrinter || formData.tipo_impresora === 'normal' ? 'text-gray-400' : ''}>
-                      Abrir cajón automáticamente al imprimir
-                    </span>
-                  </label>
-                  
-                  <p className="text-xs text-gray-500 mt-1">
-                    La impresora SPRT-POS891 tiene un puerto RJ-11 para conexión de cajón de dinero.
-                  </p>
-                </div>
+                <label className="flex items-center space-x-3">
+                  <input
+                    type="checkbox"
+                    name="open_cash_drawer"
+                    checked={formData.open_cash_drawer === true}
+                    onChange={(e) => setFormData({...formData, open_cash_drawer: e.target.checked})}
+                    className="form-checkbox h-5 w-5 text-blue-600"
+                    disabled={!canConfigurePrinter || formData.tipo_impresora === 'normal'}
+                  />
+                  <span className={!canConfigurePrinter || formData.tipo_impresora === 'normal' ? 'text-gray-400' : ''}>
+                    Abrir cajón automáticamente al imprimir
+                  </span>
+                </label>
               </div>
               
               <div>
