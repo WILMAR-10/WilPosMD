@@ -1,231 +1,90 @@
-// preload.cjs
+// Preload.cjs
+
 const { contextBridge, ipcRenderer } = require('electron');
 
-// Función para envolver métodos de API con manejo de errores
-const wrapApiMethod = (method, methodName) => {
-  return async (...args) => {
-    try {
-      return await method(...args);
-    } catch (error) {
-      console.error(`Error en ${methodName}:`, error);
-      return {
-        success: false,
-        error: error.message || `Error desconocido en ${methodName}`
-      };
-    }
-  };
-};
-
-// Base context API
+// Expose version info
 contextBridge.exposeInMainWorld('versions', {
   node: () => process.versions.node,
   chrome: () => process.versions.chrome,
   electron: () => process.versions.electron
 });
 
-// API Principal
+// Expose core app API
 contextBridge.exposeInMainWorld('api', {
-  // Window control handlers
+  // Window controls
   minimize: () => ipcRenderer.invoke('minimize'),
   maximize: () => ipcRenderer.invoke('maximize'),
   close: () => ipcRenderer.invoke('close'),
 
-  // Database initialization
+  // Database
   initializeDatabase: () => ipcRenderer.invoke('initialize-database'),
 
-  // Products handlers
+  // CRUD: Products
   getProducts: () => ipcRenderer.invoke('productos:obtener'),
-  addProduct: (product) => ipcRenderer.invoke('productos:insertar', product),
+  addProduct: product => ipcRenderer.invoke('productos:insertar', product),
   updateProduct: (id, product) => ipcRenderer.invoke('productos:actualizar', id, product),
-  deleteProduct: (id) => ipcRenderer.invoke('productos:eliminar', id),
+  deleteProduct: id => ipcRenderer.invoke('productos:eliminar', id),
 
-  // Users handlers
+  // CRUD: Users
   getUsers: () => ipcRenderer.invoke('usuarios:obtener'),
-  addUser: (user) => ipcRenderer.invoke('usuarios:insertar', user),
+  addUser: user => ipcRenderer.invoke('usuarios:insertar', user),
   updateUser: (id, user) => ipcRenderer.invoke('usuarios:actualizar', id, user),
-  deleteUser: (id) => ipcRenderer.invoke('usuarios:eliminar', id),
+  deleteUser: id => ipcRenderer.invoke('usuarios:eliminar', id),
 
-  // Categories handlers
+  // CRUD: Categories
   getCategories: () => ipcRenderer.invoke('categorias:obtener'),
-  addCategory: (category) => ipcRenderer.invoke('categorias:insertar', category),
+  addCategory: category => ipcRenderer.invoke('categorias:insertar', category),
   updateCategory: (id, category) => ipcRenderer.invoke('categorias:actualizar', id, category),
-  deleteCategory: (id) => ipcRenderer.invoke('categorias:eliminar', id),
+  deleteCategory: id => ipcRenderer.invoke('categorias:eliminar', id),
 
-  // Customers handlers
+  // CRUD: Customers
   getCustomers: () => ipcRenderer.invoke('clientes:obtener'),
-  addCustomer: (customer) => ipcRenderer.invoke('clientes:insertar', customer),
+  addCustomer: customer => ipcRenderer.invoke('clientes:insertar', customer),
   updateCustomer: (id, customer) => ipcRenderer.invoke('clientes:actualizar', id, customer),
-  deleteCustomer: (id) => ipcRenderer.invoke('clientes:eliminar', id),
+  deleteCustomer: id => ipcRenderer.invoke('clientes:eliminar', id),
 
-  // Sales handlers
+  // Sales
   createSale: (sale, details) => ipcRenderer.invoke('ventas:insertar', sale, details),
-  getSales: (filters) => ipcRenderer.invoke('ventas:obtener', filters),
-  getSaleDetails: (id) => ipcRenderer.invoke('ventas:obtenerPorId', id),
-  cancelSale: (id) => ipcRenderer.invoke('cancelSale', id),
+  getSales: filters => ipcRenderer.invoke('ventas:obtener', filters),
+  getSaleDetails: id => ipcRenderer.invoke('ventas:obtenerPorId', id),
+  cancelSale: id => ipcRenderer.invoke('cancelSale', id),
 
-  // Invoice handlers
-  generateInvoice: (saleId) => ipcRenderer.invoke('facturas:generar', saleId),
-  getInvoice: (saleId) => ipcRenderer.invoke('facturas:obtener', saleId),
-
-  // Report handlers
-  getDailySalesReport: (date) => ipcRenderer.invoke('reportes:ventasDiarias', date),
+  // Reports
+  getDailySalesReport: date => ipcRenderer.invoke('reportes:ventasDiarias', date),
   getMonthlyReport: (month, year) => ipcRenderer.invoke('reportes:ventasMensuales', month, year),
   getSalesReport: (startDate, endDate) => ipcRenderer.invoke('reportes:ventas', startDate, endDate),
   getTopProducts: (startDate, endDate, limit = 10) => ipcRenderer.invoke('reportes:topProductos', startDate, endDate, limit),
-  getDailyReports: (params) => ipcRenderer.invoke('resumen:obtenerPorFechas', params.startDate, params.endDate),
 
-  // Settings handlers
+  // Settings
   getSettings: () => ipcRenderer.invoke('configuracion:obtener'),
-  saveSettings: (settings) => ipcRenderer.invoke('configuracion:actualizar', settings),
+  saveSettings: settings => ipcRenderer.invoke('configuracion:actualizar', settings),
 
-  // Authentication handlers
-  login: (credentials) => ipcRenderer.invoke('login', credentials),
+  // Auth
+  login: credentials => ipcRenderer.invoke('login', credentials),
   logout: () => ipcRenderer.invoke('logout'),
 
-  // File/folder management
-  openFolder: wrapApiMethod(async (folderPath) => {
-    return await ipcRenderer.invoke('openFolder', folderPath);
-  }, 'openFolder'),
+  // Folder management
+  openFolder: folderPath => ipcRenderer.invoke('openFolder', folderPath),
 
   // Window management
-  openComponentWindow: (component) => ipcRenderer.invoke('openComponentWindow', component),
+  openComponentWindow: component => ipcRenderer.invoke('openComponentWindow', component),
   identifyWindow: () => ipcRenderer.invoke('identifyWindow'),
 
   // App paths
   getAppPaths: () => ipcRenderer.invoke('getAppPaths'),
 
-  // Sync events between windows
+  // Sync events
   registerSyncListener: () => {
     ipcRenderer.on('sync-event', (_, event) => {
-      const syncEvent = new CustomEvent('sync-event', { detail: event });
-      window.dispatchEvent(syncEvent);
+      window.dispatchEvent(new CustomEvent('sync-event', { detail: event }));
     });
   },
-
-  unregisterSyncListener: () => {
-    ipcRenderer.removeAllListeners('sync-event');
-  },
-
-  broadcastSyncEvent: (event) => {
-    ipcRenderer.send('broadcast-sync-event', event);
-  },
-
-  // New PDF helper
-  getPDFPath: () => ipcRenderer.invoke('get-pdf-path')
+  unregisterSyncListener: () => ipcRenderer.removeAllListeners('sync-event'),
+  broadcastSyncEvent: event => ipcRenderer.send('broadcast-sync-event', event)
 });
 
-// Expose app state management
-contextBridge.exposeInMainWorld('electron', {
-  app: {
-    getState: () => ipcRenderer.invoke('app:getState'),
-    setState: (state) => ipcRenderer.invoke('app:setState', state)
-  }
-});
-
-// Expose unified printer API
+// Expose printer API (native detection and raw ESC/POS printing)
 contextBridge.exposeInMainWorld('printerApi', {
-  getPrinters: async () => {
-    try {
-      console.log('printerApi.getPrinters called from renderer');
-      const result = await ipcRenderer.invoke('get-printers');
-      console.log('getPrinters result:', result);
-
-      if (!result || typeof result !== 'object') {
-        console.warn('Invalid result from get-printers', result);
-        return {
-          success: false,
-          error: 'Invalid response from printer API',
-          printers: []
-        };
-      }
-
-      return {
-        success: !!result.success,
-        printers: Array.isArray(result.printers) ? result.printers : [],
-        error: result.error || undefined
-      };
-    } catch (error) {
-      console.error('Error in getPrinters:', error);
-      return {
-        success: false,
-        error: error.message || 'Unknown error',
-        printers: []
-      };
-    }
-  },
-
-  print: (options) => {
-    try {
-      console.log('printerApi.print called from renderer', options);
-      return ipcRenderer.invoke('print', options)
-        .catch(err => {
-          console.error('Error in print invoke:', err);
-          return { success: false, error: err.message || 'Unknown error' };
-        });
-    } catch (error) {
-      console.error('Error in print:', error);
-      return Promise.resolve({ success: false, error: error.message || 'Unknown error' });
-    }
-  },
-
-  testPrinter: (printerName) => {
-    try {
-      console.log('printerApi.testPrinter called from renderer', printerName);
-      if (!printerName) {
-        console.warn('No printer name provided to testPrinter');
-        return Promise.resolve({
-          success: false,
-          error: 'Printer name is required'
-        });
-      }
-
-      return ipcRenderer.invoke('test-printer', printerName)
-        .then(result => {
-          console.log('testPrinter result:', result);
-          return result;
-        })
-        .catch(err => {
-          console.error('Error in testPrinter invoke:', err);
-          return {
-            success: false,
-            error: `IPC error: ${err.message || 'Unknown error'}`
-          };
-        });
-    } catch (error) {
-      console.error('Error in testPrinter function:', error);
-      return Promise.resolve({
-        success: false,
-        error: `Function error: ${error.message || 'Unknown error'}`
-      });
-    }
-  },
-
-  savePdf: (options) => {
-    try {
-      return ipcRenderer.invoke('save-pdf', options)
-        .catch(err => ({ success: false, error: err.message || 'Unknown error' }));
-    } catch (error) {
-      console.error('Save PDF error:', error);
-      return Promise.resolve({ success: false, error: error.message || 'Unknown error' });
-    }
-  },
-
-  getPdfPath: () => {
-    try {
-      return ipcRenderer.invoke('get-pdf-path').catch(() => null);
-    } catch (error) {
-      console.error('Get PDF path error:', error);
-      return Promise.resolve(null);
-    }
-  },
-
-  printRaw: (text, printerName) => {
-    try {
-      return ipcRenderer.invoke('print-raw', { text, printerName })
-        .catch(err => ({ success: false, error: err.message || 'Unknown error' }));
-    } catch (error) {
-      console.error('Raw print error:', error);
-      return Promise.resolve({ success: false, error: error.message || 'Unknown error' });
-    }
-  }
+  getPrinters: () => ipcRenderer.invoke('get-printers'),
+  printRaw: (data, printerName) => ipcRenderer.invoke('print-raw', { data, printerName })
 });

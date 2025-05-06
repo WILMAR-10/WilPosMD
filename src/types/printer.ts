@@ -1,93 +1,64 @@
 // src/types/printer.ts
 
-// Define printer type enum
+/**
+ * Tipos y estructuras para impresión ESC/POS nativa vía printer module
+ */
+
+/**
+ * Enum de tipos de impresora para configuración visual
+ */
 export enum PrinterType {
   STANDARD = 'normal',
-  THERMAL_80MM = 'termica',
+  THERMAL_80MM = 'termica80',
   THERMAL_58MM = 'termica58'
 }
 
-// Define interface for printer devices
+/**
+ * Representa una impresora detectada en el sistema
+ */
 export interface Printer {
+  /** Nombre de la impresora según el spooler del sistema */
   name: string;
-  portName?: string;
-  description?: string;
-  status?: number;
+  /** Si esta marcada como predeterminada */
   isDefault?: boolean;
+  /** Descripción opcional */
+  description?: string;
+  /** Indicador genérico para impresoras térmicas */
   isThermal?: boolean;
-  options?: Record<string, any>;
 }
 
-// Interface for print options
-export interface PrintOptions {
-  html?: string;
-  silent?: boolean;
+/**
+ * Parámetros para impresión RAW (ESC/POS)
+ */
+export interface RawPrintOptions {
+  /** Secuencia ESC/POS en string o bytes */
+  data: string | Uint8Array;
+  /** Nombre de la impresora; si null, usa la predeterminada */
   printerName?: string | null;
-  copies?: number;
-  printBackground?: boolean;
-  options?: {
-    paperWidth?: string;
-    printSpeed?: string;
-    fontSize?: string;
-    thermal?: boolean;
-    [key: string]: any;
-  };
 }
 
-// Interface for response from print operation
+/**
+ * Resultado genérico de una operación de impresión RAW
+ */
 export interface PrintResult {
+  /** Éxito al enviar datos a la impresora */
   success: boolean;
-  error?: string;
-  message?: string;
-  needManualPrint?: boolean;
-}
-
-// Interface for PDF saving options
-export interface SavePdfOptions {
-  directory?: string;
-  path?: string;
-  filename?: string;
-  html?: string;
-  overwrite?: boolean;
-  options?: {
-    printBackground?: boolean;
-    margins?: {
-      top?: number;
-      bottom?: number;
-      left?: number;
-      right?: number;
-    };
-    pageSize?: string;
-    [key: string]: any;
-  };
-}
-
-// Interface for the API printInvoice method (matches preload.cjs expectations)
-export interface PrintInvoiceOptions {
-  html: string;
-  printerName?: string;
-  silent?: boolean;
-  copies?: number;
-  options?: {
-    paperWidth?: string;
-    printSpeed?: string;
-    fontSize?: string;
-    [key: string]: any;
-    };
-}
-// Interface for save PDF results
-export interface SavePdfResult {
-  success: boolean;
-  path?: string;
-  originalPath?: string;
-  message?: string;
+  /** Identificador de job en el spooler (si aplica) */
+  jobID?: number | string;
+  /** Mensaje de error en caso de fallo */
   error?: string;
 }
 
-// Interface for printer status
+/**
+ * Estado básico de la impresora para UI
+ */
 export interface PrinterStatus {
+  /** Disponible o no */
   available: boolean;
+  /** Nombre de la impresora configurada */
   printerName?: string;
+  /** Mensaje informativo */
   message?: string;
+  /** Error si ocurrió alguno */
   error?: string;
 }

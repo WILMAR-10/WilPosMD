@@ -13,9 +13,14 @@ import ConfirmDialog from '../components/ConfirmDialog';
 import ProtectedRoute from '../components/ProtectedRoute';
 import Unauthorized from '../components/Unauthorized';
 import PrinterDiagnostic from '../utils/PrinterDiagnostic';
+import ThermalPrintService from '../services/ThermalPrintService';
 
 type AlertType = 'success' | 'warning' | 'error' | 'info';
 
+// Tipado para cola de alertas
+type AlertItem = { id: string; type: AlertType; message: string };
+
+// Cola de alertas
 const Configuracion: React.FC = () => {
   const { user, logout, hasPermission } = useAuth();
   const { settings, loading, error: settingsError, saveSettings } = useSettings();
@@ -41,14 +46,21 @@ const Configuracion: React.FC = () => {
     open_cash_drawer: settings?.open_cash_drawer || false
   });
 
+  // Cola de alertas
+  const [alerts, setAlerts] = useState<AlertItem[]>([]);
+  const showAlert = (type: AlertType, message: string) => {
+    const id = crypto.randomUUID();
+    setAlerts(prev => [...prev, { id, type, message }]);
+    setTimeout(() => setAlerts(prev => prev.filter(a => a.id !== id)), 5000);
+  };
+
   // Estado para el logo
   const [logoPreview, setLogoPreview] = useState<string | null>(null);
   const [logoFile, setImageFile] = useState<File | null>(null);
 
   // Estados para manejo de UI
-  const [activeTab, setActiveTab] = useState('general');
+  const [activeTab, setActiveTab] = useState<'general' | 'facturacion' | 'usuario'>('general');
   const [isSaving, setIsSaving] = useState(false);
-  const [alert, setAlert] = useState<{ type: AlertType; message: string } | null>(null);
 
   // Diálogo de confirmación
   const [confirmDialog, setConfirmDialog] = useState({
@@ -59,16 +71,18 @@ const Configuracion: React.FC = () => {
     type: 'warning' as 'warning' | 'danger' | 'info'
   });
 
-  // Add printer list state
+  // Lista de impresoras
   const [printers, setPrinters] = useState<Array<{
     name: string;
     isDefault?: boolean;
     isThermal?: boolean;
   }>>([]);
 
+  // Permiso de edición
+  const canEditSettings = hasPermission('configuracion', 'editar');
+
   // Check user permissions
   const canViewSettings = hasPermission('configuracion', 'ver');
-  const canEditSettings = hasPermission('configuracion', 'editar');
   const canConfigurePrinter = hasPermission('configuracion', 'config');
 
   // Cargar configuración inicial y datos necesarios
@@ -94,10 +108,7 @@ const Configuracion: React.FC = () => {
         }));
       } catch (error) {
         console.error('Error loading settings:', error);
-        setAlert({
-          type: 'error',
-          message: 'Error loading configuration'
-        });
+        showAlert('error', 'Error loading configuration');
       }
     };
 
@@ -107,23 +118,36 @@ const Configuracion: React.FC = () => {
   // Cuando cambie la pestaña y sea 'facturacion', refresca la lista
   useEffect(() => {
     const loadPrinters = async () => {
+      if (activeTab !== 'facturacion') return;
+  
       try {
-        if (activeTab !== 'facturacion') return;
         const api = window.printerApi;
-        if (!api) throw new Error('Printer API not available');
-        const result = await api.getPrinters();
-        if (result.success) setPrinters(result.printers || []);
-        else throw new Error(result.error || 'Unknown error loading printers');
-      } catch (error) {
-        console.error('Error loading printers:', error);
-        setAlert({
-          type: 'error',
-          message: `Error al cargar impresoras: ${error instanceof Error ? error.message : 'Error desconocido'}`
-        });
+        if (!api) throw new Error('Printer API no disponible');
+  
+        const res = await api.getPrinters();
+        let lista: Array<{ name: string; isDefault?: boolean; isThermal?: boolean }> = [];
+  
+        // La API puede devolver directamente un array...
+        if (Array.isArray(res)) {
+          lista = res;
+        }
+        // ...o un objeto { success, printers, error }
+        else if ((res as any).success) {
+          lista = (res as any).printers;
+        } else {
+          throw new Error((res as any).error || 'Error desconocido al cargar impresoras');
+        }
+  
+        setPrinters(lista);
+      } catch (err: any) {
+        console.error('Error loading printers:', err);
+        showAlert('error', `Error al cargar impresoras: ${err.message}`);
       }
     };
+  
     loadPrinters();
   }, [activeTab]);
+  
 
   // Manejar cambios en el formulario
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
@@ -168,10 +192,7 @@ const Configuracion: React.FC = () => {
   const handleSaveSettings = async () => {
     // Check if user has edit permission
     if (!canEditSettings) {
-      setAlert({
-        type: 'error',
-        message: 'No tienes permiso para modificar la configuración'
-      });
+      showAlert('error', 'No tienes permiso para modificar la configuración');
       return;
     }
 
@@ -200,39 +221,26 @@ const Configuracion: React.FC = () => {
 
       // Asegurar que la ruta de PDF existe si está habilitada la opción
       if (updatedSettings.guardar_pdf && !updatedSettings.ruta_pdf) {
-        try {
-          const api = window.api;
-          if (api?.getAppPaths) {
-            const paths = await api.getAppPaths();
-            const docsPath = paths.documents;
-            const defaultPdfPath = `${docsPath}/WilPOS/Facturas`;
-
-            // Crear la carpeta si no existe
-            if (api.ensureDir) {
-              await api.ensureDir(defaultPdfPath);
-            }
-
-            updatedSettings.ruta_pdf = defaultPdfPath;
+        const api = window.api!;
+        const paths = await api.getAppPaths();
+        const carpeta = `${paths.userData}/facturas`;
+        if (api.ensureDir) {
+          const res = await api.ensureDir(carpeta);
+          if (!res.success) {
+            console.error('Error al crear carpeta de facturas:', res.error);
           }
-        } catch (error) {
-          console.error('Error al configurar ruta de PDF:', error);
         }
+        updatedSettings.ruta_pdf = carpeta;
       }
 
       // Guardar configuración en la base de datos
       await saveSettings(updatedSettings);
 
-      setAlert({
-        type: 'success',
-        message: 'Configuración guardada con éxito'
-      });
+      showAlert('success', 'Configuración guardada con éxito');
 
     } catch (error) {
       console.error('Error completo:', error);
-      setAlert({
-        type: 'error',
-        message: `Error al guardar configuración: ${error instanceof Error ? error.message : 'Error desconocido'}`
-      });
+      showAlert('error', `Error al guardar configuración: ${error instanceof Error ? error.message : 'Error desconocido'}`);
     } finally {
       setIsSaving(false);
     }
@@ -291,58 +299,47 @@ const Configuracion: React.FC = () => {
       // Abrir la carpeta
       if (api.openFolder) {
         await api.openFolder(facturaPath);
-        setAlert({
-          type: 'success',
-          message: 'Carpeta de facturas abierta correctamente'
-        });
+        showAlert('success', 'Carpeta de facturas abierta correctamente');
       } else {
-        setAlert({
-          type: 'info',
-          message: `Ruta de facturas: ${facturaPath}`
-        });
+        showAlert('info', `Ruta de facturas: ${facturaPath}`);
       }
 
     } catch (error) {
       console.error('Error al abrir carpeta:', error);
-      setAlert({
-        type: 'error',
-        message: `No se pudo abrir la carpeta: ${error instanceof Error ? error.message : 'Error desconocido'}`
-      });
+      showAlert('error', `No se pudo abrir la carpeta: ${error instanceof Error ? error.message : 'Error desconocido'}`);
     }
   };
 
   // Function to test the selected printer
   const testSelectedPrinter = async () => {
     try {
-      // First check if printerApi exists at all
-      if (!window.printerApi) {
-        throw new Error('Printer API not available');
+      const name = formData.impresora_termica;
+      if (!name) throw new Error('Por favor seleccione una impresora primero');
+      showAlert('info', `Probando impresora: ${name}…`);
+      // 1) ESC/POS raw
+      if (window.printerApi?.printRaw) {
+        const cmd = `\x1B\x40\x1B\x61\x01WilPOS Test Page\n\nPrinter: ${name}\nDate: ${new Date().toLocaleString()}\n\n\n\n\x1D\x56\x00`;
+        const res = await window.printerApi.printRaw(cmd, name);
+        console.log('printRaw→', res);
+        if (res.success) {
+          showAlert('success', 'Prueba enviada. Revise la impresora.');
+          return;
+        }
+        if (res.error) throw new Error(res.error);
       }
-      
-      // Then check if we have a printer name configured
-      if (!formData.impresora_termica) {
-        throw new Error('No printer selected. Please select a printer first.');
+      // 2) Fallback diagnóstico
+      console.log('Falling back to PrinterDiagnostic');
+      const diag = new PrinterDiagnostic();
+      const dr = await diag.testPrinter(name);
+      console.log('diag→', dr);
+      if (dr.status === 'success') {
+        showAlert('success', dr.message);
+        return;
       }
-      
-      // Now we can safely use the testPrinter function
-      // The non-null assertion operator (!) tells TypeScript that we know testPrinter exists
-      const result = await window.printerApi.testPrinter!(formData.impresora_termica);
-      
-      if (result && result.success) {
-        setAlert({ 
-          type: 'success', 
-          message: 'Prueba de impresora enviada correctamente. Revise la impresora.' 
-        });
-      } else {
-        const errorMsg = result?.error || 'Error desconocido al probar la impresora';
-        throw new Error(errorMsg);
-      }
-    } catch (error) {
-      console.error('Error testing printer:', error);
-      setAlert({
-        type: 'error',
-        message: `Error al probar impresora: ${error instanceof Error ? error.message : 'Error desconocido'}`
-      });
+      throw new Error(dr.message || 'La impresora no respondió correctamente');
+    } catch (err) {
+      console.error('Error in testSelectedPrinter:', err);
+      showAlert('error', err instanceof Error ? err.message : 'Error desconocido');
     }
   };
 
@@ -352,15 +349,15 @@ const Configuracion: React.FC = () => {
       const diag = new PrinterDiagnostic();
       const result = await diag.runFullDiagnostic();
       console.log('Diagnostic result:', result);
-      setAlert({
-        type: result.status === 'success' ? 'success'
+      showAlert(
+        result.status === 'success' ? 'success'
           : result.status === 'warning' ? 'warning'
           : 'error',
-        message: result.message
-      });
+        result.message
+      );
     } catch (error) {
       console.error('Error running diagnostic:', error);
-      setAlert({ type: 'error', message: 'Error al ejecutar diagnóstico' });
+      showAlert('error', 'Error al ejecutar diagnóstico');
     }
   }, []);
 
@@ -391,23 +388,12 @@ const Configuracion: React.FC = () => {
       <div className={`${style.bg} ${style.text} ${style.border} border p-4 rounded-lg flex items-start mb-4`}>
         <Icon className="w-5 h-5 mr-2 mt-0.5 flex-shrink-0" />
         <div className="flex-grow">{message}</div>
-        <button onClick={() => setAlert(null)} className="ml-2 flex-shrink-0">
+        <button onClick={() => setAlerts(prev => prev.filter(a => a.message !== message))} className="ml-2 flex-shrink-0">
           <X className="w-4 h-4" />
         </button>
       </div>
     );
   };
-
-  // Cerrar la alerta después de un tiempo
-  useEffect(() => {
-    if (alert) {
-      const timer = setTimeout(() => {
-        setAlert(null);
-      }, 5000);
-
-      return () => clearTimeout(timer);
-    }
-  }, [alert]);
 
   // Renderizado de pestañas
   const renderTab = () => {
@@ -718,6 +704,17 @@ const Configuracion: React.FC = () => {
                   >
                     Diagnóstico
                   </button>
+                  <button
+                    type="button"
+                    onClick={onTestPrint}
+                    disabled={!canEditSettings}
+                    className={`px-4 py-2 rounded-lg ${!canEditSettings
+                        ? 'bg-gray-200 text-gray-500 cursor-not-allowed'
+                        : 'bg-yellow-600 text-white hover:bg-yellow-700'
+                      }`}
+                  >
+                    Test Print
+                  </button>
                 </div>
                 <p className="text-sm text-gray-500 mt-1">
                   Las impresoras marcadas como (Térmica) serán tratadas como impresoras de recibos.
@@ -864,12 +861,31 @@ const Configuracion: React.FC = () => {
     }
   };
 
+  async function onTestPrint() {
+    const service = ThermalPrintService.getInstance();
+    // 1) obtener impresoras
+    const list = await service.getPrinters();
+    const defaultName = list.find(p => p.isDefault)?.name;
+    // 2) preparar comandos ESC/POS como Uint8Array ( NO .buffer )
+    const encoder = new TextEncoder();
+    const cmds = encoder.encode('\x1B\x40WilPOS TEST\n\x1D\x56\x00');
+    // 3) enviar a IPC pasando el Uint8Array
+    const result = await window.printerApi.printRaw(cmds, defaultName);
+    if (result.success) {
+      alert(`✅ Prueba enviada a ${defaultName}`);
+    } else {
+      alert(`❌ Error: ${result.error}`);
+    }
+  }
+
   return (
     <div className="min-h-full bg-gray-50 flex flex-col">
       {/* Alerta */}
-      {alert && (
+      {alerts.length > 0 && (
         <div className="fixed top-6 right-6 z-50 max-w-md w-full">
-          <Alert type={alert.type} message={alert.message} />
+          {alerts.map(alert => (
+            <Alert key={alert.id} type={alert.type} message={alert.message} />
+          ))}
         </div>
       )}
 

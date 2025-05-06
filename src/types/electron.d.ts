@@ -249,8 +249,8 @@ declare global {
       print: (opts: PrintOptions) => Promise<PrintResult>;
       savePdf: (opts: SavePdfOptions) => Promise<SavePdfResult>;
       getPdfPath?: () => Promise<string | null>;
-      printRaw?: (texto: string, printerName?: string) => Promise<PrintResult>;
-      testPrinter?: (printerName?: string) => Promise<PrintResult>;
+      printRaw: (data: string | Uint8Array, printerName?: string) => Promise<PrintResult>;
+      testPrinter: (printerName?: string) => Promise<PrintResult>;
     };
     electron?: {
       app: {
