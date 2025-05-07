@@ -1503,72 +1503,70 @@ export const ConfiguracionDAO = {
                 'nombre_negocio', 'direccion', 'telefono', 'email', 'rnc',
                 'sitio_web', 'logo', 'mensaje_recibo', 'moneda', 'formato_fecha',
                 'impuesto_nombre', 'impuesto_porcentaje', 'tema',
-                'impresora_termica', 'guardar_pdf', 'ruta_pdf', 'tipo_impresora'
+                'impresora_termica', 'guardar_pdf', 'ruta_pdf', 'tipo_impresora',
             ];
 
             if (existing) {
-                // Build dynamic update query for optional fields
                 const updates = [];
-                const params = [];
+                const params  = [];
+        
+                for (const field of fields) {
+                  if (!(field in settings)) continue;
+        
+                  // skip flags until columns exist
+                  if ((field === 'auto_cut' || field === 'open_cash_drawer') &&
+                      !columnExists('configuracion', field)) {
+                    console.log(`Skipping ${field}, column not yet migrated`);
+                    continue;
+                  }
+        
+                  updates.push(`${field} = ?`);
+                  if (field === 'logo' && settings[field]?.startsWith('data:image')) {
+                    params.push(settings[field]);
+                  } else if (['guardar_pdf','auto_cut','open_cash_drawer'].includes(field)) {
+                    params.push(settings[field] ? 1 : 0);
+                  } else {
+                    params.push(settings[field]);
+                  }
+                }
+        
+                if (updates.length === 0) return false;
+        
+                updates.push('ultima_modificacion = ?');
+                params.push(new Date().toISOString());
+                params.push(existing.id);
+        
+                const sql = `UPDATE configuracion SET ${updates.join(', ')} WHERE id = ?`;
+                const result = db.prepare(sql).run(...params);
+                return result.changes > 0;
+              } else {
+                // Insert new settings
+                const columns = [];
+                const placeholders = [];
+                const values = [];
 
-                // Add any field that exists in the settings object
                 for (const field of fields) {
                     if (field in settings) {
-                        updates.push(`${field} = ?`);
-                        params.push(settings[field]);
+                        columns.push(field);
+                        placeholders.push('?');
+                        if (['guardar_pdf','auto_cut','open_cash_drawer'].includes(field)) {
+                            values.push(settings[field] ? 1 : 0);
+                        } else {
+                            values.push(settings[field]);
+                        }
                     }
                 }
 
-                if (updates.length === 0) {
-                    return false; // Nothing to update
-                }
-
-                // Add updated timestamp
-                updates.push('ultima_modificacion = ?');
-                params.push(new Date().toISOString());
-
-                // Add ID for WHERE clause
-                params.push(existing.id);
+                // always add timestamp
+                columns.push('ultima_modificacion');
+                placeholders.push('?');
+                values.push(new Date().toISOString());
 
                 const query = `
-                    UPDATE configuracion 
-                    SET ${updates.join(', ')}
-                    WHERE id = ?
+                    INSERT INTO configuracion (${columns.join(', ')})
+                    VALUES (${placeholders.join(', ')})
                 `;
-
-                const result = db.prepare(query).run(...params);
-                return result.changes > 0;
-            } else {
-                // Insert new settings
-                const stmt = db.prepare(`
-                    INSERT INTO configuracion (
-                        nombre_negocio, direccion, telefono, email, rnc,
-                        sitio_web, logo, mensaje_recibo, moneda, formato_fecha,
-                        impuesto_nombre, impuesto_porcentaje, tema,
-                        impresora_termica, guardar_pdf, ruta_pdf, tipo_impresora
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                `);
-
-                const result = stmt.run(
-                    settings.nombre_negocio || 'WilPOS',
-                    settings.direccion || null,
-                    settings.telefono || null,
-                    settings.email || null,
-                    settings.rnc || null,
-                    settings.sitio_web || null,
-                    settings.logo || null,
-                    settings.mensaje_recibo || 'Gracias por su compra',
-                    settings.moneda || 'RD$',
-                    settings.formato_fecha || 'DD/MM/YYYY',
-                    settings.impuesto_nombre || 'ITEBIS',
-                    settings.impuesto_porcentaje || 0.18,
-                    settings.tema || 'claro',
-                    settings.impresora_termica || null,
-                    settings.guardar_pdf ? 1 : 0,
-                    settings.ruta_pdf || null,
-                    settings.tipo_impresora || null
-                );
-
+                const result = db.prepare(query).run(...values);
                 return { id: result.lastInsertRowid, success: true };
             }
         } catch (error) {

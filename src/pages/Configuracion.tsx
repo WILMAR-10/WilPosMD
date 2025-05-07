@@ -1,5 +1,5 @@
 ﻿// src/pages/Configuracion.tsx 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Save, Settings, Printer, ChevronLeft,
   User, LogOut, Store, Phone, Mail,
@@ -43,7 +43,8 @@ const Configuracion: React.FC = () => {
     ruta_pdf: '',
     tipo_impresora: 'normal',
     auto_cut: settings?.auto_cut !== false,       // default true
-    open_cash_drawer: settings?.open_cash_drawer || false
+    open_cash_drawer: settings?.open_cash_drawer || false,
+    logo: settings?.logo ?? undefined
   });
 
   // Cola de alertas
@@ -184,13 +185,12 @@ const Configuracion: React.FC = () => {
     setImageFile(null);
     setFormData(prev => ({
       ...prev,
-      logo: ''      // ← empty string, stays a string
+      logo: undefined
     }));
   };
 
   // Guardar configuración
   const handleSaveSettings = async () => {
-    // Check if user has edit permission
     if (!canEditSettings) {
       showAlert('error', 'No tienes permiso para modificar la configuración');
       return;
@@ -199,51 +199,86 @@ const Configuracion: React.FC = () => {
     setIsSaving(true);
 
     try {
-      let updatedSettings = { ...formData };
+      // Create a clean copy of formData
+      let updatedSettings: SettingsType = { ...formData };
 
-      // Procesar logo si hay uno nuevo
+      // Process logo if there's a new one
       if (logoFile) {
-        const reader = new FileReader();
-        const logoBase64Promise = new Promise<string>((resolve) => {
-          reader.onloadend = () => {
-            resolve(reader.result as string);
-          };
-          reader.readAsDataURL(logoFile);
-        });
-
-        const logoBase64 = await logoBase64Promise;
+        const logoBase64 = await convertFileToBase64(logoFile);
         updatedSettings.logo = logoBase64;
       } else if (logoPreview) {
+        // If there's a preview but no file, it might be the existing logo
         updatedSettings.logo = logoPreview;
-      } else {
-        updatedSettings.logo = undefined;
       }
 
-      // Asegurar que la ruta de PDF existe si está habilitada la opción
+      // Ensure printer settings are properly set
+      if (updatedSettings.impresora_termica === '') {
+        updatedSettings.impresora_termica = undefined;
+      }
+
+      // Ensure boolean values are correctly set
+      updatedSettings.guardar_pdf = !!updatedSettings.guardar_pdf;
+      updatedSettings.auto_cut = updatedSettings.auto_cut !== false;
+      updatedSettings.open_cash_drawer = !!updatedSettings.open_cash_drawer;
+
+      // Ensure PDF directory exists if PDF saving is enabled
       if (updatedSettings.guardar_pdf && !updatedSettings.ruta_pdf) {
-        const api = window.api!;
-        const paths = await api.getAppPaths();
-        const carpeta = `${paths.userData}/facturas`;
-        if (api.ensureDir) {
-          const res = await api.ensureDir(carpeta);
-          if (!res.success) {
-            console.error('Error al crear carpeta de facturas:', res.error);
+        const api = window.api;
+        if (api?.getAppPaths) {
+          const paths = await api.getAppPaths();
+          const defaultPath = `${paths.userData}/facturas`;
+
+          if (api.ensureDir) {
+            await api.ensureDir(defaultPath);
           }
+
+          updatedSettings.ruta_pdf = defaultPath;
         }
-        updatedSettings.ruta_pdf = carpeta;
       }
 
-      // Guardar configuración en la base de datos
-      await saveSettings(updatedSettings);
+      // Log what we're saving for debugging
+      console.log('Saving settings:', JSON.stringify(updatedSettings, null, 2));
 
-      showAlert('success', 'Configuración guardada con éxito');
+      // Remove fields that might not exist yet in the DB
+      const safeSettings = { ...updatedSettings };
+      delete safeSettings.auto_cut;
+      delete safeSettings.open_cash_drawer;
 
+      // Save to database
+      const result = await saveSettings(safeSettings);
+
+      // Verify the save was successful by checking the returned data
+      if (result) {
+        showAlert('success', 'Configuración guardada con éxito');
+
+        // Update the thermal print service with the new printer
+        const thermalService = ThermalPrintService.getInstance();
+        thermalService.setActivePrinter(updatedSettings.impresora_termica);
+      } else {
+        throw new Error('No se recibió respuesta del servidor');
+      }
     } catch (error) {
-      console.error('Error completo:', error);
+      console.error('Error saving settings:', error);
       showAlert('error', `Error al guardar configuración: ${error instanceof Error ? error.message : 'Error desconocido'}`);
     } finally {
       setIsSaving(false);
     }
+  };
+
+  // Helper function to convert File to base64
+  const convertFileToBase64 = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        if (typeof reader.result === 'string') {
+          resolve(reader.result);
+        } else {
+          reject(new Error('FileReader did not return a string'));
+        }
+      };
+      reader.onerror = (error) => reject(error);
+      reader.readAsDataURL(file);
+    });
   };
 
   // Confirmar cierre de sesión
@@ -310,56 +345,55 @@ const Configuracion: React.FC = () => {
     }
   };
 
-  // Function to test the selected printer
-  const testSelectedPrinter = async () => {
+  // Unified printer testing function
+  const testPrinter = async (mode: 'basic' | 'diagnostic' | 'full' = 'basic') => {
     try {
       const name = formData.impresora_termica;
       if (!name) throw new Error('Por favor seleccione una impresora primero');
       showAlert('info', `Probando impresora: ${name}…`);
-      // 1) ESC/POS raw
-      if (window.printerApi?.printRaw) {
-        const cmd = `\x1B\x40\x1B\x61\x01WilPOS Test Page\n\nPrinter: ${name}\nDate: ${new Date().toLocaleString()}\n\n\n\n\x1D\x56\x00`;
-        const res = await window.printerApi.printRaw(cmd, name);
-        console.log('printRaw→', res);
-        if (res.success) {
-          showAlert('success', 'Prueba enviada. Revise la impresora.');
-          return;
+      const service = ThermalPrintService.getInstance();
+
+      switch (mode) {
+        case 'diagnostic': {
+          const diag = new PrinterDiagnostic();
+          const result = await diag.runFullDiagnostic();
+          showAlert(result.status as AlertType, result.message);
+          break;
         }
-        if (res.error) throw new Error(res.error);
+        case 'full': {
+          const msg =
+            '\x1B\x40' +                      // Initialize
+            '\x1B\x61\x01' +                  // Center
+            '\x1B\x45\x01' + 'WilPOS TEST PAGE\n\n' + '\x1B\x45\x00' +
+            `Printer: ${name}\nDate: ${new Date().toLocaleString()}\n\n` +
+            'This is a printer test page.\n\n\n\n' +
+            '\x1D\x56\x00';                   // Cut
+          const commands = new TextEncoder().encode(msg);
+          const res = await service.printRaw(commands, name);
+          if (res.success) showAlert('success', `Test print sent to ${name}`);
+          else throw new Error(res.error || 'Unknown printer error');
+          break;
+        }
+        default: {
+          // basic
+          if (service.testPrinter) {
+            const basic = await service.testPrinter(name);
+            if (basic.success) showAlert('success', 'Prueba enviada. Revise la impresora.');
+            else throw new Error(basic.error || 'Error en prueba básica');
+          } else {
+            // fallback to PrinterDiagnostic
+            const diag = new PrinterDiagnostic();
+            const dr = await diag.testPrinter(name);
+            if (dr.status === 'success') showAlert('success', dr.message);
+            else throw new Error(dr.message || 'La impresora no respondió correctamente');
+          }
+        }
       }
-      // 2) Fallback diagnóstico
-      console.log('Falling back to PrinterDiagnostic');
-      const diag = new PrinterDiagnostic();
-      const dr = await diag.testPrinter(name);
-      console.log('diag→', dr);
-      if (dr.status === 'success') {
-        showAlert('success', dr.message);
-        return;
-      }
-      throw new Error(dr.message || 'La impresora no respondió correctamente');
     } catch (err) {
-      console.error('Error in testSelectedPrinter:', err);
+      console.error('Error testing printer:', err);
       showAlert('error', err instanceof Error ? err.message : 'Error desconocido');
     }
   };
-
-  // Handler para diagnóstico completo
-  const handleRunDiagnostic = useCallback(async () => {
-    try {
-      const diag = new PrinterDiagnostic();
-      const result = await diag.runFullDiagnostic();
-      console.log('Diagnostic result:', result);
-      showAlert(
-        result.status === 'success' ? 'success'
-          : result.status === 'warning' ? 'warning'
-            : 'error',
-        result.message
-      );
-    } catch (error) {
-      console.error('Error running diagnostic:', error);
-      showAlert('error', 'Error al ejecutar diagnóstico');
-    }
-  }, []);
 
   // Mostrar diálogo de confirmación
   const showConfirmDialog = (title: string, message: string, onConfirm: () => void, type: 'warning' | 'danger' | 'info' = 'warning') => {
@@ -394,64 +428,6 @@ const Configuracion: React.FC = () => {
       </div>
     );
   };
-
-  // onTestPrint function with
-  async function onTestPrint() {
-    try {
-      // Get thermal print service
-      const service = ThermalPrintService.getInstance();
-
-      // Get printer list
-      const printers = await service.getAvailablePrinters();
-
-      // Find the selected printer or use default
-      const targetPrinter = formData.impresora_termica ||
-        printers.find(p => p.isDefault)?.name;
-
-      if (!targetPrinter) {
-        showAlert('warning', 'No printer selected. Please select a printer first.');
-        return;
-      }
-
-      // Prepare a more robust test message with formatting
-      const testMessage =
-        '\x1B\x40' +                      // Initialize printer
-        '\x1B\x61\x01' +                  // Center align
-        '\x1B\x45\x01' +                  // Emphasis ON
-        'WilPOS TEST PAGE\n\n' +          // Title
-        '\x1B\x45\x00' +                  // Emphasis OFF
-        `Printer: ${targetPrinter}\n` +
-        `Date: ${new Date().toLocaleString()}\n\n` +
-        'This is a printer test page.\n' +
-        'If you can read this, your printer\n' +
-        'is working correctly.\n\n\n' +    // Content
-        '\x1D\x56\x00';                   // Cut paper
-
-      // Convert to Uint8Array for better compatibility
-      const encoder = new TextEncoder();
-      const commands = encoder.encode(testMessage);
-
-      // Log what we're doing
-      console.log(`Sending test print to: ${targetPrinter}`);
-
-      // Check if printRaw method is available
-      if (!window.printerApi?.printRaw) {
-        throw new Error('Printer API not available');
-      }
-
-      // Send to printer - use service for better error handling
-      const result = await service.printRaw(commands, targetPrinter);
-
-      if (result.success) {
-        showAlert('success', `Test print sent to ${targetPrinter}`);
-      } else {
-        throw new Error(result.error || 'Unknown printer error');
-      }
-    } catch (error) {
-      console.error('Test print error:', error);
-      showAlert('error', `Print error: ${error instanceof Error ? error.message : 'Unknown error'}`);
-    }
-  }
 
   // Renderizado de pestañas
   const renderTab = () => {
@@ -742,7 +718,7 @@ const Configuracion: React.FC = () => {
                   </select>
                   <button
                     type="button"
-                    onClick={testSelectedPrinter}
+                    onClick={() => testPrinter('basic')}
                     disabled={!formData.impresora_termica || !canEditSettings}
                     className={`px-4 py-2 rounded-lg ${!formData.impresora_termica || !canEditSettings
                       ? 'bg-gray-200 text-gray-500 cursor-not-allowed'
@@ -753,7 +729,7 @@ const Configuracion: React.FC = () => {
                   </button>
                   <button
                     type="button"
-                    onClick={handleRunDiagnostic}
+                    onClick={() => testPrinter('diagnostic')}
                     disabled={!canEditSettings}
                     className={`px-4 py-2 rounded-lg ${!canEditSettings
                       ? 'bg-gray-200 text-gray-500 cursor-not-allowed'
@@ -764,7 +740,7 @@ const Configuracion: React.FC = () => {
                   </button>
                   <button
                     type="button"
-                    onClick={onTestPrint}
+                    onClick={() => testPrinter('full')}
                     disabled={!canEditSettings}
                     className={`px-4 py-2 rounded-lg ${!canEditSettings
                       ? 'bg-gray-200 text-gray-500 cursor-not-allowed'

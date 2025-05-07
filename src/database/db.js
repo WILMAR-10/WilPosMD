@@ -366,6 +366,21 @@ export function migrateDatabase() {
       db.prepare('INSERT INTO schema_migrations (version) VALUES (?)').run(4);
     }
 
+    // Add auto_cut and open_cash_drawer columns
+    if (currentVersion < 5) {
+      try {
+        db.exec(`
+          ALTER TABLE configuracion ADD COLUMN auto_cut INTEGER DEFAULT 1;
+          ALTER TABLE configuracion ADD COLUMN open_cash_drawer INTEGER DEFAULT 0;
+        `);
+        db.prepare('INSERT INTO schema_migrations (version) VALUES (?)').run(5);
+        console.log("Migration #5 completed successfully: Added auto_cut and open_cash_drawer columns");
+      } catch (migrationError) {
+        console.error('Error in migration #5:', migrationError);
+        throw migrationError;
+      }
+    }
+
     console.log('Database migrations completed successfully');
   } catch (error) {
     console.error('Migration error:', error);

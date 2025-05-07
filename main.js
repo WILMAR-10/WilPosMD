@@ -15,6 +15,21 @@ try {
   console.warn('⚠️ printer module not found:', err);
 }
 
+// DIRECT PRINTER TEST - logs all available printers via the native module
+if (printer) {
+  try {
+    const printers = printer.getPrinters();
+    console.log(
+      'DIRECT PRINTER TEST - Available printers:',
+      JSON.stringify(printers, null, 2)
+    );
+  } catch (err) {
+    console.error('DIRECT PRINTER TEST - Failed:', err);
+  }
+} else {
+  console.error('DIRECT PRINTER TEST - printer module not available');
+}
+
 // Import database functions
 import {
   initializeDatabase,
@@ -166,37 +181,33 @@ safeHandle('openComponentWindow', async (event, componentName) => {
 
 // IPC: Get printers
 safeHandle('get-printers', () => {
+  console.log('get-printers called from renderer');
+  
   try {
-    // Try the native printer module first for better device information
-    if (printer) {
-      const printerList = printer.getPrinters().map(p => ({
-        ...p,
-        isThermal: p.name.toLowerCase().includes('thermal') || 
-                  p.name.toLowerCase().includes('pos') || 
-                  p.name.toLowerCase().includes('receipt')
-      }));
-      console.log('Available printers:', printerList.map(p => p.name));
-      return printerList;
-    }
-    
-    // Fall back to Electron's built-in printer detection
+    // Try Electron's built-in printer detection first for testing
     const win = BrowserWindow.getAllWindows()[0];
     if (win) {
-      const electronPrinters = win.webContents.getPrinters().map(p => ({
-        ...p,
-        isThermal: p.name.toLowerCase().includes('thermal') || 
-                  p.name.toLowerCase().includes('pos') || 
-                  p.name.toLowerCase().includes('receipt')
-      }));
-      console.log('Available printers (Electron):', electronPrinters.map(p => p.name));
+      const electronPrinters = win.webContents.getPrinters();
+      console.log('Electron printers found:', electronPrinters.length);
       return electronPrinters;
     }
   } catch (err) {
-    console.error('Error detecting printers:', err);
+    console.error('Error in Electron printer detection:', err);
   }
   
-  // Return empty list if nothing else works
-  return [];
+  try {
+    // Then try native module if available
+    if (printer) {
+      const printerList = printer.getPrinters();
+      console.log('Native printer module found printers:', printerList.length);
+      return printerList;
+    }
+  } catch (err) {
+    console.error('Error in native printer module:', err);
+  }
+  
+  console.log('No printers could be detected');
+  return []; // Return empty list as last resort
 });
 
 // IPC: Print raw ESC/POS

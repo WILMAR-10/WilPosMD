@@ -25,6 +25,8 @@ export interface Printer {
   description?: string;
   /** Indicador genérico para impresoras térmicas */
   isThermal?: boolean;
+  
+  portName?: string;
 }
 
 /**
