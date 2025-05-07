@@ -119,14 +119,14 @@ const Configuracion: React.FC = () => {
   useEffect(() => {
     const loadPrinters = async () => {
       if (activeTab !== 'facturacion') return;
-  
+
       try {
         const api = window.printerApi;
         if (!api) throw new Error('Printer API no disponible');
-  
+
         const res = await api.getPrinters();
         let lista: Array<{ name: string; isDefault?: boolean; isThermal?: boolean }> = [];
-  
+
         // La API puede devolver directamente un array...
         if (Array.isArray(res)) {
           lista = res;
@@ -137,17 +137,17 @@ const Configuracion: React.FC = () => {
         } else {
           throw new Error((res as any).error || 'Error desconocido al cargar impresoras');
         }
-  
+
         setPrinters(lista);
       } catch (err: any) {
         console.error('Error loading printers:', err);
         showAlert('error', `Error al cargar impresoras: ${err.message}`);
       }
     };
-  
+
     loadPrinters();
   }, [activeTab]);
-  
+
 
   // Manejar cambios en el formulario
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
@@ -352,7 +352,7 @@ const Configuracion: React.FC = () => {
       showAlert(
         result.status === 'success' ? 'success'
           : result.status === 'warning' ? 'warning'
-          : 'error',
+            : 'error',
         result.message
       );
     } catch (error) {
@@ -394,6 +394,64 @@ const Configuracion: React.FC = () => {
       </div>
     );
   };
+
+  // onTestPrint function with
+  async function onTestPrint() {
+    try {
+      // Get thermal print service
+      const service = ThermalPrintService.getInstance();
+
+      // Get printer list
+      const printers = await service.getAvailablePrinters();
+
+      // Find the selected printer or use default
+      const targetPrinter = formData.impresora_termica ||
+        printers.find(p => p.isDefault)?.name;
+
+      if (!targetPrinter) {
+        showAlert('warning', 'No printer selected. Please select a printer first.');
+        return;
+      }
+
+      // Prepare a more robust test message with formatting
+      const testMessage =
+        '\x1B\x40' +                      // Initialize printer
+        '\x1B\x61\x01' +                  // Center align
+        '\x1B\x45\x01' +                  // Emphasis ON
+        'WilPOS TEST PAGE\n\n' +          // Title
+        '\x1B\x45\x00' +                  // Emphasis OFF
+        `Printer: ${targetPrinter}\n` +
+        `Date: ${new Date().toLocaleString()}\n\n` +
+        'This is a printer test page.\n' +
+        'If you can read this, your printer\n' +
+        'is working correctly.\n\n\n' +    // Content
+        '\x1D\x56\x00';                   // Cut paper
+
+      // Convert to Uint8Array for better compatibility
+      const encoder = new TextEncoder();
+      const commands = encoder.encode(testMessage);
+
+      // Log what we're doing
+      console.log(`Sending test print to: ${targetPrinter}`);
+
+      // Check if printRaw method is available
+      if (!window.printerApi?.printRaw) {
+        throw new Error('Printer API not available');
+      }
+
+      // Send to printer - use service for better error handling
+      const result = await service.printRaw(commands, targetPrinter);
+
+      if (result.success) {
+        showAlert('success', `Test print sent to ${targetPrinter}`);
+      } else {
+        throw new Error(result.error || 'Unknown printer error');
+      }
+    } catch (error) {
+      console.error('Test print error:', error);
+      showAlert('error', `Print error: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
 
   // Renderizado de pestañas
   const renderTab = () => {
@@ -687,8 +745,8 @@ const Configuracion: React.FC = () => {
                     onClick={testSelectedPrinter}
                     disabled={!formData.impresora_termica || !canEditSettings}
                     className={`px-4 py-2 rounded-lg ${!formData.impresora_termica || !canEditSettings
-                        ? 'bg-gray-200 text-gray-500 cursor-not-allowed'
-                        : 'bg-blue-600 text-white hover:bg-blue-700'
+                      ? 'bg-gray-200 text-gray-500 cursor-not-allowed'
+                      : 'bg-blue-600 text-white hover:bg-blue-700'
                       }`}
                   >
                     Probar
@@ -698,8 +756,8 @@ const Configuracion: React.FC = () => {
                     onClick={handleRunDiagnostic}
                     disabled={!canEditSettings}
                     className={`px-4 py-2 rounded-lg ${!canEditSettings
-                        ? 'bg-gray-200 text-gray-500 cursor-not-allowed'
-                        : 'bg-green-600 text-white hover:bg-green-700'
+                      ? 'bg-gray-200 text-gray-500 cursor-not-allowed'
+                      : 'bg-green-600 text-white hover:bg-green-700'
                       }`}
                   >
                     Diagnóstico
@@ -709,8 +767,8 @@ const Configuracion: React.FC = () => {
                     onClick={onTestPrint}
                     disabled={!canEditSettings}
                     className={`px-4 py-2 rounded-lg ${!canEditSettings
-                        ? 'bg-gray-200 text-gray-500 cursor-not-allowed'
-                        : 'bg-yellow-600 text-white hover:bg-yellow-700'
+                      ? 'bg-gray-200 text-gray-500 cursor-not-allowed'
+                      : 'bg-yellow-600 text-white hover:bg-yellow-700'
                       }`}
                   >
                     Test Print
@@ -860,23 +918,6 @@ const Configuracion: React.FC = () => {
         return null;
     }
   };
-
-  async function onTestPrint() {
-    const service = ThermalPrintService.getInstance();
-    // 1) obtener impresoras
-    const list = await service.getPrinters();
-    const defaultName = list.find(p => p.isDefault)?.name;
-    // 2) preparar comandos ESC/POS como Uint8Array ( NO .buffer )
-    const encoder = new TextEncoder();
-    const cmds = encoder.encode('\x1B\x40WilPOS TEST\n\x1D\x56\x00');
-    // 3) enviar a IPC pasando el Uint8Array
-    const result = await window.printerApi.printRaw(cmds, defaultName);
-    if (result.success) {
-      alert(`✅ Prueba enviada a ${defaultName}`);
-    } else {
-      alert(`❌ Error: ${result.error}`);
-    }
-  }
 
   return (
     <div className="min-h-full bg-gray-50 flex flex-col">

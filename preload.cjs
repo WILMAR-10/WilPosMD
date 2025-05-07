@@ -1,4 +1,4 @@
-// Preload.cjs
+// preload.cjs - Updated with proper printer integration
 
 const { contextBridge, ipcRenderer } = require('electron');
 
@@ -63,8 +63,9 @@ contextBridge.exposeInMainWorld('api', {
   login: credentials => ipcRenderer.invoke('login', credentials),
   logout: () => ipcRenderer.invoke('logout'),
 
-  // Folder management
+  // File/Folder management
   openFolder: folderPath => ipcRenderer.invoke('openFolder', folderPath),
+  ensureDir: folderPath => ipcRenderer.invoke('ensureDir', folderPath),
 
   // Window management
   openComponentWindow: component => ipcRenderer.invoke('openComponentWindow', component),
@@ -80,11 +81,62 @@ contextBridge.exposeInMainWorld('api', {
     });
   },
   unregisterSyncListener: () => ipcRenderer.removeAllListeners('sync-event'),
-  broadcastSyncEvent: event => ipcRenderer.send('broadcast-sync-event', event)
+  broadcastSyncEvent: event => ipcRenderer.send('broadcast-sync-event', event),
+  
+  // Printer
+  getPrinters: () => ipcRenderer.invoke('get-printers'),
+  testPrinter: (printerName) => ipcRenderer.invoke('test-printer', { printerName })
 });
 
-// Expose printer API (native detection and raw ESC/POS printing)
+// Expose printer API with proper error handling
 contextBridge.exposeInMainWorld('printerApi', {
-  getPrinters: () => ipcRenderer.invoke('get-printers'),
-  printRaw: (data, printerName) => ipcRenderer.invoke('print-raw', { data, printerName })
+  // Get all available printers
+  getPrinters: async () => {
+    try {
+      const printers = await ipcRenderer.invoke('get-printers');
+      return { 
+        success: true,
+        printers: Array.isArray(printers) ? printers : [] 
+      };
+    } catch (error) {
+      console.error('Error getting printers:', error);
+      return { 
+        success: false, 
+        printers: [],
+        error: error?.message || 'Unknown error getting printers'
+      };
+    }
+  },
+  
+  // Print raw ESC/POS commands
+  printRaw: async (data, printerName) => {
+    try {
+      // Handle both string and Uint8Array input
+      const payload = { 
+        data: data,
+        printerName: printerName
+      };
+      
+      return await ipcRenderer.invoke('print-raw', payload);
+    } catch (error) {
+      console.error('Error in printRaw:', error);
+      return { 
+        success: false,
+        error: error?.message || 'Unknown error in printRaw'
+      };
+    }
+  },
+  
+  // Test printer
+  testPrinter: async (printerName) => {
+    try {
+      return await ipcRenderer.invoke('test-printer', { printerName });
+    } catch (error) {
+      console.error('Error testing printer:', error);
+      return {
+        success: false,
+        error: error?.message || 'Unknown error testing printer'
+      };
+    }
+  }
 });
