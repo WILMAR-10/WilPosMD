@@ -112,6 +112,69 @@ interface SyncEvent {
   timestamp: number;
 }
 
+// Print and PDF API types
+interface PrintResult {
+  success: boolean;
+  error?: string;
+}
+
+interface SavePdfResult {
+  success: boolean;
+  path?: string;
+  error?: string;
+}
+
+interface PrintOptions {
+  html: string;
+  printerName?: string;
+  options?: {
+    silent?: boolean;
+    printBackground?: boolean;
+    deviceName?: string;
+    color?: boolean;
+    margins?: {
+      marginType?: string;
+      top?: number;
+      bottom?: number;
+      left?: number;
+      right?: number;
+    };
+    landscape?: boolean;
+    scaleFactor?: number;
+    pagesPerSheet?: number;
+    collate?: boolean;
+    copies?: number;
+    pageRanges?: Array<{
+      from: number;
+      to: number;
+    }>;
+    duplexMode?: string;
+    [key: string]: any;
+  };
+}
+
+interface SavePdfOptions {
+  path: string;
+  html: string;
+  options?: {
+    landscape?: boolean;
+    printBackground?: boolean;
+    scale?: number;
+    pageSize?: string | { width: number; height: number };
+    margins?: {
+      top?: number;
+      bottom?: number;
+      left?: number;
+      right?: number;
+    };
+    pageRanges?: string;
+    headerTemplate?: string;
+    footerTemplate?: string;
+    preferCSSPageSize?: boolean;
+    [key: string]: any;
+  };
+}
+
 declare global {
   interface Window {
     versions: Versions;
@@ -223,6 +286,7 @@ declare global {
       getPrinters: () => Promise<Printer[]>;
       printInvoice: (options: PrintInvoiceOptions) => Promise<PrintResult>;
       savePdf: (options: SavePdfOptions) => Promise<SavePdfResult>;
+      print: (options: PrintOptions) => Promise<PrintResult>;
 
       getAppPaths: () => Promise<AppPaths>;
       cancelSale: (id: number) => Promise<CancelSaleResult>;
@@ -240,7 +304,6 @@ declare global {
         attachments?: string[];
       }) => Promise<{ success: boolean; error?: string }>;
       
-      print?: (options: PrintOptions) => Promise<PrintResult>;
       printRaw?: (text: string, printerName?: string) => Promise<PrintResult>;
       testPrinter?: (printerName?: string) => Promise<PrintResult>;
     };

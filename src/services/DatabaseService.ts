@@ -158,6 +158,7 @@ export interface Settings {
   print_density?: string; 
   auto_cut?: boolean;
   open_cash_drawer?: boolean;
+  impresora_etiquetas?: string;
 }
 
 export interface InventoryMovement {

@@ -2,33 +2,6 @@ import { app, BrowserWindow, ipcMain, shell, session } from 'electron';
 import path, { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs-extra';
-import { createRequire } from 'module';
-
-// Legacy require support for CommonJS modules
-const requireModule = createRequire(import.meta.url);
-// Try to load printer module dynamically
-let printer = null;
-try {
-  printer = requireModule('printer');
-  console.log('✅ printer module loaded:', !!printer);
-} catch (err) {
-  console.warn('⚠️ printer module not found:', err);
-}
-
-// DIRECT PRINTER TEST - logs all available printers via the native module
-if (printer) {
-  try {
-    const printers = printer.getPrinters();
-    console.log(
-      'DIRECT PRINTER TEST - Available printers:',
-      JSON.stringify(printers, null, 2)
-    );
-  } catch (err) {
-    console.error('DIRECT PRINTER TEST - Failed:', err);
-  }
-} else {
-  console.error('DIRECT PRINTER TEST - printer module not available');
-}
 
 // Import database functions
 import {
@@ -178,101 +151,6 @@ safeHandle('openComponentWindow', async (event, componentName) => {
   }
 });
 
-
-// IPC: Get printers
-safeHandle('get-printers', () => {
-  console.log('get-printers called from renderer');
-  
-  try {
-    // Try Electron's built-in printer detection first for testing
-    const win = BrowserWindow.getAllWindows()[0];
-    if (win) {
-      const electronPrinters = win.webContents.getPrinters();
-      console.log('Electron printers found:', electronPrinters.length);
-      return electronPrinters;
-    }
-  } catch (err) {
-    console.error('Error in Electron printer detection:', err);
-  }
-  
-  try {
-    // Then try native module if available
-    if (printer) {
-      const printerList = printer.getPrinters();
-      console.log('Native printer module found printers:', printerList.length);
-      return printerList;
-    }
-  } catch (err) {
-    console.error('Error in native printer module:', err);
-  }
-  
-  console.log('No printers could be detected');
-  return []; // Return empty list as last resort
-});
-
-// IPC: Print raw ESC/POS
-safeHandle('print-raw', async (event, { data, printerName }) => {
-  if (!printer) {
-    return { success: false, error: 'Printer module not available' };
-  }
-  
-  try {
-    // Ensure data is properly converted to Buffer if it's not already
-    const bufferData = Buffer.isBuffer(data) ? data : 
-                      (typeof data === 'string' ? Buffer.from(data) : 
-                      Buffer.from(data));
-    
-    return new Promise(resolve => {
-      printer.printDirect({
-        data: bufferData,
-        printer: printerName || printer.getDefaultPrinterName(),
-        type: 'RAW',
-        success: jobID => {
-          console.log(`Print job sent successfully, ID: ${jobID}`);
-          resolve({ success: true, jobID });
-        },
-        error: err => {
-          console.error('Print error:', err);
-          resolve({ success: false, error: err.message || 'Unknown printing error' });
-        }
-      });
-    });
-  } catch (err) {
-    console.error('Print-raw error:', err);
-    return { success: false, error: err.message || 'Unknown printing error' };
-  }
-});
-
-safeHandle('test-printer', async (event, printerName) => {
-  try {
-    if (!printer) {
-      return { success: false, error: 'Printer module not available' };
-    }
-    
-    // Basic ESC/POS test sequence: Initialize + center align + text + cut
-    const testData = Buffer.from([
-      0x1B, 0x40,             // ESC @ - Initialize printer
-      0x1B, 0x61, 0x01,       // ESC a 1 - Center alignment
-      ...Buffer.from('WilPOS Test Page\n\n'),
-      ...Buffer.from(`Date: ${new Date().toLocaleString()}\n\n\n`),
-      0x1D, 0x56, 0x00        // GS V 0 - Cut paper
-    ]);
-    
-    return new Promise(resolve => {
-      printer.printDirect({
-        data: testData,
-        printer: printerName || printer.getDefaultPrinterName(),
-        type: 'RAW',
-        success: jobID => resolve({ success: true, jobID }),
-        error: err => resolve({ success: false, error: err.message })
-      });
-    });
-  } catch (err) {
-    console.error('Test printer error:', err);
-    return { success: false, error: err.message || 'Unknown error' };
-  }
-});
-
 // IPC: Open folder
 safeHandle('openFolder', async (_, folderPath) => {
   try {
@@ -294,24 +172,6 @@ safeHandle('getAppPaths', () => ({
   exe: app.getPath('exe'),
   appData: app.getPath('appData')
 }));
-
-// …en tu safeHandle('print-raw', …):
-safeHandle('print-raw', async (event, { data, printerName }) => {
-  if (!printer) {
-    return { success: false, error: 'Printer module not available' }
-  }
-  // data viene como ArrayBuffer / Buffer-like
-  const buf = Buffer.from(data)
-  return new Promise(resolve => {
-    printer.printDirect({
-      data: buf,
-      printer: printerName || printer.getDefaultPrinterName(),
-      type: 'RAW',
-      success: jobID => resolve({ success: true, jobID }),
-      error: err => resolve({ success: false, error: err.message })
-    })
-  })
-})
 
 // Lifecycle
 app.whenReady().then(async () => {

@@ -17,7 +17,7 @@ import { useSettings } from '../services/DatabaseService';
 interface FacturaViewerProps {
   ventaData: any;
   className?: string;
-  printMode?: boolean; // Add printMode prop for thermal printer optimization
+  printMode?: boolean | string; // accept printer type string
 }
 
 const FacturaViewer: React.FC<FacturaViewerProps> = ({ ventaData, className = "", printMode = false }) => {
@@ -145,16 +145,52 @@ const FacturaViewer: React.FC<FacturaViewerProps> = ({ ventaData, className = ""
                             (ventaData?.monto_recibido !== undefined || 
                             ventaData?.cambio !== undefined);
   
-  // Para impresora térmica de 80mm, optimizamos el ancho
-  const thermalPrinterStyles = printMode ? {
-    maxWidth: '80mm',
-    width: '80mm',
-    padding: '5mm',
-    margin: '0 auto',
-    fontSize: '10pt',
-    lineHeight: '1.2',
-    fontFamily: 'Arial, sans-serif'
-  } : {};
+  // Helper: characters per line based on paper size
+  const getPaperWidth = () => {
+    if (printMode === 'termica58') return 30;    // 58mm ≈ 30 chars
+    if (printMode === 'termica' || printMode === true) return 42; // 80mm ≈ 42 chars
+    return 80;                                   // normal layout
+  };
+
+  // Determine column widths
+  const getColumnLayout = () => {
+    const cols = getPaperWidth();
+    if (printMode === 'termica58') {
+      return { productWidth: Math.floor(cols * 0.4), qtyWidth: 3, priceWidth: 6, totalWidth: 6 };
+    }
+    return { productWidth: Math.floor(cols * 0.5), qtyWidth: 4, priceWidth: 8, totalWidth: 8 };
+  };
+  const { productWidth, qtyWidth, priceWidth, totalWidth } = getColumnLayout();
+
+  // Styles for thermal printers
+  const getThermalPrinterStyles = () => {
+    if (!printMode) return {};
+    const type = typeof printMode === 'string' ? printMode : 'termica';
+    switch(type) {
+      case 'termica58':
+        return {
+          maxWidth: '58mm',
+          width: '58mm',
+          padding: '2mm',
+          margin: '0 auto',
+          fontSize: '9pt',
+          lineHeight: '1.1',
+          fontFamily: 'Arial, sans-serif'
+        };
+      case 'termica':
+      default:
+        return {
+          maxWidth: '80mm',
+          width: '80mm',
+          padding: '5mm',
+          margin: '0 auto',
+          fontSize: '10pt',
+          lineHeight: '1.2',
+          fontFamily: 'Arial, sans-serif'
+        };
+    }
+  };
+  const thermalPrinterStyles = getThermalPrinterStyles();
 
   if (!ventaData) {
     return <div className="p-8 text-center text-gray-500">No hay datos de factura disponibles</div>;
@@ -248,11 +284,11 @@ const FacturaViewer: React.FC<FacturaViewerProps> = ({ ventaData, className = ""
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b">
-                <th className="text-left py-2 font-medium text-gray-600">Producto</th>
-                <th className="text-center py-2 font-medium text-gray-600">Cant.</th>
-                <th className="text-right py-2 font-medium text-gray-600">Precio</th>
+                <th style={{ width: `${productWidth}ch` }} className="text-left py-2 font-medium text-gray-600">Producto</th>
+                <th style={{ width: `${qtyWidth}ch` }} className="text-center py-2 font-medium text-gray-600">Cant.</th>
+                <th style={{ width: `${priceWidth}ch` }} className="text-right py-2 font-medium text-gray-600">Precio</th>
                 <th className="text-right py-2 font-medium text-gray-600">ITBIS</th>
-                <th className="text-right py-2 font-medium text-gray-600">Subtotal</th>
+                <th style={{ width: `${totalWidth}ch` }} className="text-right py-2 font-medium text-gray-600">Subtotal</th>
               </tr>
             </thead>
             <tbody>

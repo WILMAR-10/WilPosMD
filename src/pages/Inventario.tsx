@@ -6,7 +6,7 @@ import { useProducts, useCategories, Product, Category } from '../services/Datab
 import {
   Search, Pencil, Trash2, Plus, Package, BarChart4,
   AlertCircle, ArrowUpDown, RotateCcw, X, AlertTriangle,
-  Check, Loader, Barcode, ChevronLeft, Filter, SlidersHorizontal,
+  Check, Loader, Barcode, QrCode, Printer, ChevronLeft, Filter, SlidersHorizontal,
   ShieldCheck
 } from 'lucide-react';
 import { useSyncListener, broadcastSyncEvent } from '../services/SyncService';
@@ -649,6 +649,13 @@ const Inventario = () => {
     );
   };
 
+  // Add state for print panel
+  const [printPanel, setPrintPanel] = useState<{ isOpen: boolean; product: Product | null }>({
+    isOpen: false,
+    product: null
+  });
+  const [printQuantity, setPrintQuantity] = useState<number>(1);
+
   return (
     <div className="min-h-full bg-gray-50 flex flex-col">
       {/* Alerta */}
@@ -951,16 +958,30 @@ const Inventario = () => {
                       <td className="px-6 py-4 whitespace-nowrap text-right">
                         <div className="flex items-center justify-end gap-2">
                           <button
-                            className="px-3 py-1 rounded-lg text-blue-600 hover:bg-blue-50 transition-colors"
                             onClick={() => handleEditProduct(product)}
+                            title="Editar producto"
+                            className="flex items-center gap-1 px-3 py-1 bg-blue-50 text-blue-600 hover:bg-blue-100 rounded-lg transition-colors"
                           >
-                            Editar
+                            <Pencil className="w-4 h-4" />
+                            <span className="text-sm font-medium">Editar</span>
                           </button>
+
                           <button
-                            className="px-3 py-1 rounded-lg text-red-600 hover:bg-red-50 transition-colors"
-                            onClick={() => handleDeleteProduct(product.id)}
+                            onClick={() => setPrintPanel({ isOpen: true, product })}
+                            title="Imprimir etiquetas"
+                            className="flex items-center gap-1 px-3 py-1 bg-green-50 text-green-600 hover:bg-green-100 rounded-lg transition-colors"
                           >
-                            Eliminar
+                            <Printer className="w-4 h-4" />
+                            <span className="text-sm font-medium">Imprimir</span>
+                          </button>
+
+                          <button
+                            onClick={() => handleDeleteProduct(product.id)}
+                            title="Eliminar producto"
+                            className="flex items-center gap-1 px-3 py-1 bg-red-50 text-red-600 hover:bg-red-100 rounded-lg transition-colors"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                            <span className="text-sm font-medium">Eliminar</span>
                           </button>
                         </div>
                       </td>
@@ -1436,6 +1457,77 @@ const Inventario = () => {
                   </button>
                 </div>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Demo Print Panel */}
+      {printPanel.isOpen && (
+        <div className="fixed inset-0 backdrop-blur-sm z-30 flex justify-end">
+          <div
+            onClick={() => setPrintPanel({ isOpen: false, product: null })}
+            className="absolute inset-0"
+          />
+          <div className="bg-white w-full max-w-md h-[calc(100vh-64px)] mt-16 shadow-xl rounded-l-2xl relative z-10 p-6">
+            <div className="flex justify-between items-center mb-4">
+              <h2 className="text-xl font-bold">
+                Print Labels – {printPanel.product?.nombre}
+              </h2>
+              <button
+                onClick={() => setPrintPanel({ isOpen: false, product: null })}
+                className="p-2 rounded-full hover:bg-gray-100"
+              >
+                <X className="h-5 w-5 text-gray-600" />
+              </button>
+            </div>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Label Size
+                </label>
+                <select
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                  defaultValue="1.57x1.18"
+                >
+                  <option value="1.57x1.18">1.57" × 1.18"</option>
+                  <option value="1.96x1.18">1.96" × 1.18"</option>
+                  <option value="1.57x2.76">1.57" × 2.76"</option>
+                  <option value="1.96x1.57">1.96" × 1.57"</option>
+                  <option value="1.96x3.14">1.96" × 3.14"</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Cantidad
+                </label>
+                <input
+                  type="number"
+                  min={1}
+                  value={printQuantity}
+                  onChange={e => setPrintQuantity(Number(e.target.value) || 1)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                />
+              </div>
+
+              <div className="text-center">
+                <div className="inline-block p-4 border border-gray-200 rounded-md">
+                  <Barcode className="h-16 w-16 mx-auto text-gray-700" />
+                  <p className="mt-2 text-xs text-gray-500">Barcode Preview</p>
+                </div>
+                <div className="inline-block p-4 border border-gray-200 rounded-md ml-4">
+                  <QrCode className="h-16 w-16 mx-auto text-gray-700" />
+                  <p className="mt-2 text-xs text-gray-500">QR Code Preview</p>
+                </div>
+              </div>
+              <button
+                onClick={() => console.log('Print demo', { product: printPanel.product, quantity: printQuantity })}
+                className="w-full flex items-center justify-center py-2 px-4 rounded-lg bg-blue-600 text-white hover:bg-blue-700 transition-colors"
+              >
+                <Printer className="h-4 w-4 mr-2" />
+                Print Demo
+              </button>
             </div>
           </div>
         </div>

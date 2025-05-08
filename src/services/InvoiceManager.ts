@@ -1,6 +1,5 @@
 // Improved InvoiceManager.ts
 import { PreviewSale } from '../types/sales';
-import ThermalPrintService from './ThermalPrintService';
 
 interface SavePdfOptions {
   directory?: string;
@@ -9,7 +8,6 @@ interface SavePdfOptions {
 }
 
 interface PrintOptions {
-  printerName?: string;
   silent?: boolean;
   copies?: number;
   options?: {
@@ -20,15 +18,12 @@ interface PrintOptions {
   };
 }
 
-// Enhanced InvoiceManager with better error handling and printing options
+// Enhanced InvoiceManager with WebContents-based printing and PDF generation
 class InvoiceManager {
   private static instance: InvoiceManager;
-  private thermalPrintService: ThermalPrintService;
   
   // Private constructor (singleton pattern)
-  private constructor() {
-    this.thermalPrintService = ThermalPrintService.getInstance();
-  }
+  private constructor() {}
   
   // Get singleton instance
   public static getInstance(): InvoiceManager {
@@ -38,172 +33,93 @@ class InvoiceManager {
     return InvoiceManager.instance;
   }
   
-  // Print invoice with enhanced error handling and fallback options
-  public async printInvoice(sale: PreviewSale, htmlContent: string, options?: PrintOptions): Promise<boolean> {
+  // Print invoice using WebContents through IPC
+  public async printInvoice(
+    sale: PreviewSale, 
+    htmlContent: string, 
+    options?: PrintOptions
+  ): Promise<boolean> {
     try {
-      // Get settings or use defaults
+      // Get settings for printer configuration
       const settings = await this.getSettings();
       
-      // Determine if we should use a thermal printer
-      const useThermal = !!settings?.impresora_termica;
+      // We need to send complete HTML document to print correctly
+      const completeHtml = this.wrapContentWithStyles(htmlContent, settings?.tipo_impresora);
       
-      // For thermal printing (ESC/POS)
-      if (useThermal && settings?.impresora_termica) {
-        const printerStatus = await this.thermalPrintService.checkPrinterStatus(settings.impresora_termica);
-        
-        if (printerStatus.available) {
-          // Prepare receipt data from sale
-          const receiptData = this.prepareReceiptData(sale, settings);
-          
-          // Print using thermal service
-          const result = await this.thermalPrintService.printReceipt(
-            receiptData,
-            settings.impresora_termica
-          );
-          
-          if (result.success) {
-            return true;
-          }
-          
-          // Log failure but continue to fallback
-          console.warn('Thermal printing failed, falling back to standard printing:', result.error);
-        }
+      // Configure print options based on printer type
+      const printOpts = {
+        silent: options?.silent !== false,
+        printBackground: true,
+        deviceName: settings?.impresora_termica,
+        color: true,
+        margins: {
+          marginType: this.getPrinterMarginType(settings?.tipo_impresora)
+        },
+        landscape: false,
+        copies: options?.copies || 1,
+        // Scale differently based on printer type
+        scaleFactor: this.getPrinterScaleFactor(settings?.tipo_impresora)
+      };
+      
+      if (!window.api?.print) {
+        console.error('Print API not available');
+        return false;
       }
       
-      // For regular HTML printing as fallback
-      return await this.printHtml(htmlContent, options, settings);
+      // Use the print API through IPC
+      const result = await window.api.print({
+        html: completeHtml,
+        printerName: settings?.impresora_termica,
+        options: printOpts
+      });
+      
+      return result.success;
     } catch (error) {
       console.error('Print invoice error:', error);
       
-      // Try fallback printing as last resort
-      try {
-        if (typeof window.print === 'function') {
-          window.print();
-          return true;
-        }
-      } catch (fallbackError) {
-        console.error('Fallback printing failed:', fallbackError);
-      }
-      
-      throw error;
-    }
-  }
-  
-  // Convert sale to receipt data format
-  private prepareReceiptData(sale: PreviewSale, settings: any) {
-    // Extract business info from settings
-    const businessName = settings?.nombre_negocio || 'WilPOS';
-    const address = settings?.direccion;
-    const phone = settings?.telefono;
-    const taxId = settings?.rnc;
-    
-    // Format date
-    const date = new Date(sale.fecha_venta).toLocaleString();
-    
-    // Prepare items
-    const items = sale.detalles.map(item => ({
-      name: item.name,
-      quantity: item.quantity,
-      price: item.price,
-      subtotal: item.subtotal
-    }));
-    
-    // Prepare receipt data
-    return {
-      businessName,
-      address,
-      phone,
-      taxId,
-      receiptNumber: sale.id || 'N/A',
-      date,
-      customer: sale.cliente || 'Cliente General',
-      cashier: sale.usuario || 'N/A',
-      items,
-      subtotal: sale.total - sale.impuestos,
-      tax: sale.impuestos,
-      discount: sale.descuento,
-      total: sale.total,
-      paymentMethod: sale.metodo_pago,
-      amountPaid: sale.monto_recibido,
-      change: sale.cambio,
-      footer: settings?.mensaje_recibo || 'Gracias por su compra'
-    };
-  }
-  
-  // Enhanced HTML printing with better error handling
-  private async printHtml(htmlContent: string, options?: PrintOptions, settings?: any): Promise<boolean> {
-    try {
-      // Use window.printerApi.print if available
-      if (window.printerApi?.print) {
-        // Prepare print options with defaults
-        const printOptions = {
-          html: htmlContent,
-          printerName: options?.printerName || settings?.impresora_termica,
-          silent: options?.silent !== false,
-          copies: options?.copies || 1,
-          options: {
-            paperWidth: options?.options?.paperWidth || 
-              (settings?.tipo_impresora === 'termica58' ? '58mm' : '80mm'),
-            printSpeed: options?.options?.printSpeed || 'normal',
-            fontSize: options?.options?.fontSize || 'normal',
-            thermalPrinter: true,
-            ...options?.options
-          }
-        };
-        
-        const result = await window.printerApi.print(printOptions);
-        if (!result.success) {
-          throw new Error(result.error || 'Unknown printing error');
-        }
-        return true;
-      }
-      
-      // If API print not available, try window.print()
+      // Try fallback method if available
       if (typeof window.print === 'function') {
-        // Create a hidden iframe for printing
-        const iframe = document.createElement('iframe');
-        iframe.style.display = 'none';
-        document.body.appendChild(iframe);
-        
-        // Set content and print
-        if (iframe.contentDocument) {
-          iframe.contentDocument.open();
-          iframe.contentDocument.write(htmlContent);
-          iframe.contentDocument.close();
+        try {
+          // Create a temporary iframe for printing
+          const iframe = document.createElement('iframe');
+          iframe.style.display = 'none';
+          document.body.appendChild(iframe);
           
-          // Wait for content to load before printing
-          await new Promise(resolve => setTimeout(resolve, 500));
-          
-          if (iframe.contentWindow) {
-            iframe.contentWindow.print();
+          if (iframe.contentDocument) {
+            iframe.contentDocument.open();
+            iframe.contentDocument.write(htmlContent);
+            iframe.contentDocument.close();
+            
+            // Wait for content to load before printing
+            setTimeout(() => {
+              if (iframe.contentWindow) {
+                iframe.contentWindow.print();
+              }
+              
+              // Cleanup
+              setTimeout(() => {
+                document.body.removeChild(iframe);
+              }, 1000);
+            }, 500);
+            
+            return true;
           }
+        } catch (fallbackErr) {
+          console.error('Fallback printing failed:', fallbackErr);
         }
-        
-        // Cleanup after printing
-        setTimeout(() => {
-          document.body.removeChild(iframe);
-        }, 1000);
-        
-        return true;
       }
       
-      throw new Error('No printing method available');
-    } catch (error) {
-      console.error('HTML print error:', error);
-      throw error;
+      return false;
     }
   }
   
-  // Save invoice as PDF with enhanced error handling
-  public async saveAsPdf(sale: PreviewSale, htmlContent: string, options?: SavePdfOptions): Promise<string | undefined> {
+  // Save invoice as PDF using WebContents through IPC
+  public async saveAsPdf(
+    sale: PreviewSale, 
+    htmlContent: string, 
+    options?: SavePdfOptions
+  ): Promise<string | undefined> {
     try {
-      // Check if PDF API is available
-      const hasPdfApi = !!(window.printerApi?.savePdf || window.api?.savePdf);
-      
-      if (!hasPdfApi) {
-        throw new Error('PDF API not available');
-      }
-      
       // Get default directory if not specified
       let directory = options?.directory;
       if (!directory) {
@@ -212,10 +128,7 @@ class InvoiceManager {
         
         if (!directory) {
           // Try different methods to get a default path
-          if (window.printerApi?.getPdfPath) {
-            const pdfPath = await window.printerApi.getPdfPath();
-            directory = pdfPath || undefined;
-          } else if (window.api?.getAppPaths) {
+          if (window.api?.getAppPaths) {
             const paths = await window.api.getAppPaths();
             directory = `${paths.userData}/facturas`;
           }
@@ -236,41 +149,137 @@ class InvoiceManager {
       const filename = options?.filename || 
         `factura-${sale.id || 'nueva'}-${timestamp}.pdf`;
       
-      // Create full path
-      const fullPath = `${directory}/${filename}`;
+      // We need to send complete HTML document to generate PDF correctly
+      const settings = await this.getSettings();
+      const completeHtml = this.wrapContentWithStyles(htmlContent, settings?.tipo_impresora);
       
-      // Prepare save options
-      const saveOptions = {
-        path: fullPath,
-        html: htmlContent,
-        options: {
-          printBackground: true,
-          margins: {
-            top: 0,
-            bottom: 0,
-            left: 0,
-            right: 0
-          }
-        }
-      };
-      
-      // Save to PDF using available API
-      const savePdfFn = window.printerApi?.savePdf || window.api?.savePdf;
-      if (savePdfFn) {
-        const result = await savePdfFn(saveOptions);
-        
-        if (!result.success) {
-          throw new Error(result.error || 'Unknown PDF error');
-        }
-        
-        return result.path || fullPath;
+      if (!window.api?.savePdf) {
+        throw new Error('PDF API not available');
       }
       
-      throw new Error('PDF saving function not available');
+      // PDF options optimized for invoice
+      const pdfOptions = {
+        printBackground: true,
+        landscape: false,
+        pageSize: 'A4',
+        margins: {
+          top: 0.4,
+          bottom: 0.4,
+          left: 0.4,
+          right: 0.4
+        },
+        scale: 1.0
+      };
+      
+      // Use savePdf API through IPC
+      const result = await window.api.savePdf({
+        path: `${directory}/${filename}`,
+        html: completeHtml,
+        options: pdfOptions
+      });
+      
+      if (!result.success) {
+        throw new Error(result.error || 'Unknown PDF error');
+      }
+      
+      return result.path || `${directory}/${filename}`;
     } catch (error) {
       console.error('Save PDF error:', error);
       throw error;
     }
+  }
+  
+  // Helper method to determine printer margin type based on printer type
+  private getPrinterMarginType(printerType?: string): string {
+    if (printerType === 'termica58') {
+      return 'none'; // Minimize margins for narrow receipts
+    } else if (printerType === 'termica') {
+      return 'printableArea'; // Use printable area for standard thermal
+    } else {
+      return 'default'; // Default margins for regular printers
+    }
+  }
+  
+  // Helper method to determine printer scale factor based on printer type
+  private getPrinterScaleFactor(printerType?: string): number {
+    switch (printerType) {
+      case 'termica58':
+        return 0.65; // Narrower paper needs more scaling
+      case 'termica':
+        return 0.8;  // Standard thermal paper
+      default:
+        return 1.0;  // Normal paper
+    }
+  }
+  
+  // Helper to wrap HTML content with proper styles for printing
+  private wrapContentWithStyles(content: string, printerType?: string): string {
+    // Base CSS for all printer types
+    let printerStyles = '';
+    
+    // Apply different styles based on printer type
+    if (printerType === 'termica58') {
+      printerStyles = `
+        @page { 
+          size: 58mm auto; 
+          margin: 2mm;
+        }
+        body {
+          width: 54mm;
+          font-size: 9pt;
+          font-family: 'Arial', sans-serif;
+          line-height: 1.2;
+        }
+        table { width: 100%; }
+        th, td { padding: 2px; font-size: 8pt; }
+      `;
+    } else if (printerType === 'termica') {
+      printerStyles = `
+        @page { 
+          size: 80mm auto; 
+          margin: 3mm;
+        }
+        body {
+          width: 74mm;
+          font-size: 10pt;
+          font-family: 'Arial', sans-serif;
+          line-height: 1.3;
+        }
+        table { width: 100%; }
+        th, td { padding: 3px; font-size: 9pt; }
+      `;
+    } else {
+      printerStyles = `
+        @page { 
+          size: A4; 
+          margin: 10mm;
+        }
+        body {
+          font-family: 'Arial', sans-serif;
+        }
+      `;
+    }
+    
+    // Create complete HTML document
+    return `
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <meta charset="UTF-8">
+          <title>Factura</title>
+          <style>
+            ${printerStyles}
+            /* Ensure page breaks don't occur in the middle of important sections */
+            .page-break-avoid {
+              page-break-inside: avoid;
+            }
+          </style>
+        </head>
+        <body>
+          ${content}
+        </body>
+      </html>
+    `;
   }
   
   // Enhanced settings retrieval with better caching

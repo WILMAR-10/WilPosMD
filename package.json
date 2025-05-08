@@ -41,8 +41,6 @@
     "@types/react-datepicker": "^6.2.0",
     "better-sqlite3": "^11.9.1",
     "cheerio": "^1.0.0",
-    "escpos": "^3.0.0-alpha.6",
-    "escpos-usb": "^3.0.0-alpha.4",
     "lucide-react": "^0.487.0",
     "node-thermal-printer": "^4.4.5",
     "pdfkit": "^0.17.0",

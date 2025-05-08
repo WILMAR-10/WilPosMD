@@ -5,7 +5,7 @@ import {
   User, LogOut, Store, Phone, Mail,
   Globe, FileText, DollarSign, Calendar,
   Upload, Check, AlertTriangle, X, Folder,
-  ShieldAlert, ShieldCheck, RotateCcw, Info
+  ShieldAlert, ShieldCheck, RotateCcw, Info, Barcode
 } from 'lucide-react';
 import { useAuth } from '../services/AuthContext';
 import { useSettings, Settings as SettingsType } from '../services/DatabaseService';
@@ -13,7 +13,6 @@ import ConfirmDialog from '../components/ConfirmDialog';
 import ProtectedRoute from '../components/ProtectedRoute';
 import Unauthorized from '../components/Unauthorized';
 import PrinterDiagnostic from '../utils/PrinterDiagnostic';
-import ThermalPrintService from '../services/ThermalPrintService';
 
 type AlertType = 'success' | 'warning' | 'error' | 'info';
 
@@ -24,28 +23,6 @@ type AlertItem = { id: string; type: AlertType; message: string };
 const Configuracion: React.FC = () => {
   const { user, logout, hasPermission } = useAuth();
   const { settings, loading, error: settingsError, saveSettings } = useSettings();
-
-  // Estado para el formulario
-  const [formData, setFormData] = useState<SettingsType>({
-    nombre_negocio: '',
-    direccion: '',
-    telefono: '',
-    email: '',
-    rnc: '',
-    sitio_web: '',
-    mensaje_recibo: '',
-    moneda: 'RD$',
-    formato_fecha: 'DD/MM/YYYY',
-    impuesto_nombre: 'ITEBIS',
-    impuesto_porcentaje: 0.18,
-    impresora_termica: settings?.impresora_termica || '',
-    guardar_pdf: true,
-    ruta_pdf: '',
-    tipo_impresora: 'normal',
-    auto_cut: settings?.auto_cut !== false,       // default true
-    open_cash_drawer: settings?.open_cash_drawer || false,
-    logo: settings?.logo ?? undefined
-  });
 
   // Cola de alertas
   const [alerts, setAlerts] = useState<AlertItem[]>([]);
@@ -72,13 +49,6 @@ const Configuracion: React.FC = () => {
     type: 'warning' as 'warning' | 'danger' | 'info'
   });
 
-  // Lista de impresoras
-  const [printers, setPrinters] = useState<Array<{
-    name: string;
-    isDefault?: boolean;
-    isThermal?: boolean;
-  }>>([]);
-
   // Permiso de edición
   const canEditSettings = hasPermission('configuracion', 'editar');
 
@@ -87,68 +57,6 @@ const Configuracion: React.FC = () => {
   const canConfigurePrinter = hasPermission('configuracion', 'config');
 
   // Cargar configuración inicial y datos necesarios
-  useEffect(() => {
-    const loadConfig = async () => {
-      try {
-        if (!settings) return;
-        setFormData(prev => ({
-          ...prev,
-          nombre_negocio: settings.nombre_negocio || 'WilPOS',
-          direccion: settings.direccion || '',
-          telefono: settings.telefono || '',
-          email: settings.email || '',
-          rnc: settings.rnc || '',
-          sitio_web: settings.sitio_web || '',
-          mensaje_recibo: settings.mensaje_recibo || 'Gracias por su compra',
-          moneda: settings.moneda || 'RD$',
-          formato_fecha: settings.formato_fecha || 'DD/MM/YYYY',
-          impuesto_nombre: settings.impuesto_nombre || 'ITEBIS',
-          impuesto_porcentaje: settings.impuesto_porcentaje ?? 0.18,
-          guardar_pdf: settings.guardar_pdf ?? true,
-          ruta_pdf: settings.ruta_pdf || '',
-        }));
-      } catch (error) {
-        console.error('Error loading settings:', error);
-        showAlert('error', 'Error loading configuration');
-      }
-    };
-
-    loadConfig();
-  }, [settings]);
-
-  // Cuando cambie la pestaña y sea 'facturacion', refresca la lista
-  useEffect(() => {
-    const loadPrinters = async () => {
-      if (activeTab !== 'facturacion') return;
-
-      try {
-        const api = window.printerApi;
-        if (!api) throw new Error('Printer API no disponible');
-
-        const res = await api.getPrinters();
-        let lista: Array<{ name: string; isDefault?: boolean; isThermal?: boolean }> = [];
-
-        // La API puede devolver directamente un array...
-        if (Array.isArray(res)) {
-          lista = res;
-        }
-        // ...o un objeto { success, printers, error }
-        else if ((res as any).success) {
-          lista = (res as any).printers;
-        } else {
-          throw new Error((res as any).error || 'Error desconocido al cargar impresoras');
-        }
-
-        setPrinters(lista);
-      } catch (err: any) {
-        console.error('Error loading printers:', err);
-        showAlert('error', `Error al cargar impresoras: ${err.message}`);
-      }
-    };
-
-    loadPrinters();
-  }, [activeTab]);
-
 
   // Manejar cambios en el formulario
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
@@ -239,13 +147,8 @@ const Configuracion: React.FC = () => {
       // Log what we're saving for debugging
       console.log('Saving settings:', JSON.stringify(updatedSettings, null, 2));
 
-      // Remove fields that might not exist yet in the DB
-      const safeSettings = { ...updatedSettings };
-      delete safeSettings.auto_cut;
-      delete safeSettings.open_cash_drawer;
-
       // Save to database
-      const result = await saveSettings(safeSettings);
+      const result = await saveSettings(updatedSettings);
 
       // Verify the save was successful by checking the returned data
       if (result) {
@@ -342,56 +245,6 @@ const Configuracion: React.FC = () => {
     } catch (error) {
       console.error('Error al abrir carpeta:', error);
       showAlert('error', `No se pudo abrir la carpeta: ${error instanceof Error ? error.message : 'Error desconocido'}`);
-    }
-  };
-
-  // Unified printer testing function
-  const testPrinter = async (mode: 'basic' | 'diagnostic' | 'full' = 'basic') => {
-    try {
-      const name = formData.impresora_termica;
-      if (!name) throw new Error('Por favor seleccione una impresora primero');
-      showAlert('info', `Probando impresora: ${name}…`);
-      const service = ThermalPrintService.getInstance();
-
-      switch (mode) {
-        case 'diagnostic': {
-          const diag = new PrinterDiagnostic();
-          const result = await diag.runFullDiagnostic();
-          showAlert(result.status as AlertType, result.message);
-          break;
-        }
-        case 'full': {
-          const msg =
-            '\x1B\x40' +                      // Initialize
-            '\x1B\x61\x01' +                  // Center
-            '\x1B\x45\x01' + 'WilPOS TEST PAGE\n\n' + '\x1B\x45\x00' +
-            `Printer: ${name}\nDate: ${new Date().toLocaleString()}\n\n` +
-            'This is a printer test page.\n\n\n\n' +
-            '\x1D\x56\x00';                   // Cut
-          const commands = new TextEncoder().encode(msg);
-          const res = await service.printRaw(commands, name);
-          if (res.success) showAlert('success', `Test print sent to ${name}`);
-          else throw new Error(res.error || 'Unknown printer error');
-          break;
-        }
-        default: {
-          // basic
-          if (service.testPrinter) {
-            const basic = await service.testPrinter(name);
-            if (basic.success) showAlert('success', 'Prueba enviada. Revise la impresora.');
-            else throw new Error(basic.error || 'Error en prueba básica');
-          } else {
-            // fallback to PrinterDiagnostic
-            const diag = new PrinterDiagnostic();
-            const dr = await diag.testPrinter(name);
-            if (dr.status === 'success') showAlert('success', dr.message);
-            else throw new Error(dr.message || 'La impresora no respondió correctamente');
-          }
-        }
-      }
-    } catch (err) {
-      console.error('Error testing printer:', err);
-      showAlert('error', err instanceof Error ? err.message : 'Error desconocido');
     }
   };
 
@@ -553,6 +406,63 @@ const Configuracion: React.FC = () => {
                   </select>
                 </div>
               </div>
+
+              <div>
+                <label htmlFor="impuesto_nombre" className="block text-sm font-medium text-gray-700 mb-1">
+                  Nombre del Impuesto
+                </label>
+                <input
+                  type="text"
+                  id="impuesto_nombre"
+                  name="impuesto_nombre"
+                  className="w-full p-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  value={formData.impuesto_nombre}
+                  onChange={handleChange}
+                  placeholder="ITEBIS"
+                  disabled={!canEditSettings}
+                />
+              </div>
+
+              <div>
+                <label htmlFor="formato_fecha" className="block text-sm font-medium text-gray-700 mb-1">
+                  Formato de Fecha
+                </label>
+                <div className="relative">
+                  <Calendar className="absolute left-3 top-3 text-gray-400 h-4 w-4" />
+                  <select
+                    id="formato_fecha"
+                    name="formato_fecha"
+                    className="pl-10 w-full p-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    value={formData.formato_fecha}
+                    onChange={handleChange}
+                    disabled={!canEditSettings}
+                  >
+                    <option value="DD/MM/YYYY">DD/MM/YYYY</option>
+                    <option value="MM/DD/YYYY">MM/DD/YYYY</option>
+                    <option value="YYYY-MM-DD">YYYY-MM-DD</option>
+                  </select>
+                </div>
+              </div>
+
+            </div>
+
+            <div>
+              <label htmlFor="mensaje_recibo" className="block text-sm font-medium text-gray-700 mb-1">
+                Mensaje de Agradecimiento
+              </label>
+              <textarea
+                id="mensaje_recibo"
+                name="mensaje_recibo"
+                rows={3}
+                className="w-full p-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                value={formData.mensaje_recibo}
+                onChange={handleChange}
+                placeholder="Gracias por su compra"
+                disabled={!canEditSettings}
+              />
+              <div className="text-xs text-gray-500 mt-1">
+                Este mensaje aparecerá al final de cada factura.
+              </div>
             </div>
 
             <div>
@@ -632,74 +542,16 @@ const Configuracion: React.FC = () => {
       case 'facturacion':
         return (
           <div className="space-y-6">
-            <h2 className="text-lg font-medium text-gray-800">Configuración de Facturación</h2>
+            <h2 className="text-lg font-medium text-gray-800 mb-4">Configuración de Impresoras</h2>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <div>
-                <label htmlFor="impuesto_nombre" className="block text-sm font-medium text-gray-700 mb-1">
-                  Nombre del Impuesto
-                </label>
-                <input
-                  type="text"
-                  id="impuesto_nombre"
-                  name="impuesto_nombre"
-                  className="w-full p-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  value={formData.impuesto_nombre}
-                  onChange={handleChange}
-                  placeholder="ITEBIS"
-                  disabled={!canEditSettings}
-                />
+            {/* Invoice Printer */}
+            <div className="mb-6 p-4 bg-blue-50 rounded-lg border border-blue-100">
+              <div className="flex items-center gap-2 mb-3">
+                <Printer className="h-5 w-5 text-blue-600" />
+                <h3 className="font-medium text-blue-800">Impresora de Facturas</h3>
               </div>
 
-              <div>
-                <label htmlFor="formato_fecha" className="block text-sm font-medium text-gray-700 mb-1">
-                  Formato de Fecha
-                </label>
-                <div className="relative">
-                  <Calendar className="absolute left-3 top-3 text-gray-400 h-4 w-4" />
-                  <select
-                    id="formato_fecha"
-                    name="formato_fecha"
-                    className="pl-10 w-full p-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    value={formData.formato_fecha}
-                    onChange={handleChange}
-                    disabled={!canEditSettings}
-                  >
-                    <option value="DD/MM/YYYY">DD/MM/YYYY</option>
-                    <option value="MM/DD/YYYY">MM/DD/YYYY</option>
-                    <option value="YYYY-MM-DD">YYYY-MM-DD</option>
-                  </select>
-                </div>
-              </div>
-            </div>
-
-            <div>
-              <label htmlFor="mensaje_recibo" className="block text-sm font-medium text-gray-700 mb-1">
-                Mensaje de Agradecimiento
-              </label>
-              <textarea
-                id="mensaje_recibo"
-                name="mensaje_recibo"
-                rows={3}
-                className="w-full p-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                value={formData.mensaje_recibo}
-                onChange={handleChange}
-                placeholder="Gracias por su compra"
-                disabled={!canEditSettings}
-              />
-              <div className="text-xs text-gray-500 mt-1">
-                Este mensaje aparecerá al final de cada factura.
-              </div>
-            </div>
-
-            <div className="space-y-6">
-              <h2 className="text-lg font-medium text-gray-800">Configuración de Impresora</h2>
-
-              {/* Printer selection */}
-              <div>
-                <label htmlFor="impresora_termica" className="block text-sm font-medium text-gray-700 mb-1">
-                  Impresora Térmica
-                </label>
+              <div className="space-y-4">
                 <div className="flex space-x-2">
                   <select
                     id="impresora_termica"
@@ -718,6 +570,21 @@ const Configuracion: React.FC = () => {
                   </select>
                   <button
                     type="button"
+                    onClick={() => window.webContents?.getAllWebContents().length > 0 && window.webContents.fromId(window.webContents.getAllWebContents()[0].id).getPrintersAsync().then(printers => {
+                      setPrinters(printers.map(p => ({
+                        name: p.name,
+                        isDefault: p.isDefault,
+                        isThermal: p.name.toLowerCase().includes('term') || p.name.toLowerCase().includes('receipt')
+                      })));
+                      showAlert('info', 'Lista de impresoras actualizada');
+                    }).catch(err => showAlert('error', `Error al cargar impresoras: ${err.message}`))}
+                    className="p-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300"
+                    title="Actualizar lista de impresoras"
+                  >
+                    <RotateCcw className="h-4 w-4" />
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => testPrinter('basic')}
                     disabled={!formData.impresora_termica || !canEditSettings}
                     className={`px-4 py-2 rounded-lg ${!formData.impresora_termica || !canEditSettings
@@ -727,106 +594,175 @@ const Configuracion: React.FC = () => {
                   >
                     Probar
                   </button>
+                </div>
+
+                <div>
+                  <label htmlFor="tipo_impresora" className="block text-sm font-medium text-gray-700 mb-1">
+                    Tipo de Impresora
+                  </label>
+                  <select
+                    id="tipo_impresora"
+                    name="tipo_impresora"
+                    className="w-full p-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    value={formData.tipo_impresora}
+                    onChange={handleChange}
+                    disabled={!canEditSettings}
+                  >
+                    <option value="normal">Impresora Normal</option>
+                    <option value="termica">Impresora Térmica 80mm</option>
+                    <option value="termica58">Impresora Térmica 58mm</option>
+                  </select>
+                </div>
+
+                {/* Printer Options */}
+                <div className="grid grid-cols-2 gap-4 pt-2">
+                  <div className="flex items-center">
+                    <input
+                      type="checkbox"
+                      id="auto_cut"
+                      name="auto_cut"
+                      className="h-4 w-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500"
+                      checked={formData.auto_cut !== false}
+                      onChange={(e) => setFormData({ ...formData, auto_cut: e.target.checked })}
+                      disabled={!canEditSettings}
+                    />
+                    <label htmlFor="auto_cut" className="ml-2 block text-sm text-gray-700">
+                      Corte automático
+                    </label>
+                  </div>
+
+                  <div className="flex items-center">
+                    <input
+                      type="checkbox"
+                      id="open_cash_drawer"
+                      name="open_cash_drawer"
+                      className="h-4 w-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500"
+                      checked={formData.open_cash_drawer === true}
+                      onChange={(e) => setFormData({ ...formData, open_cash_drawer: e.target.checked })}
+                      disabled={!canEditSettings}
+                    />
+                    <label htmlFor="open_cash_drawer" className="ml-2 block text-sm text-gray-700">
+                      Abrir cajón al imprimir
+                    </label>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Barcode Printer */}
+            <div className="mb-6 p-4 bg-green-50 rounded-lg border border-green-100">
+              <div className="flex items-center gap-2 mb-3">
+                <Barcode className="h-5 w-5 text-green-600" />
+                <h3 className="font-medium text-green-800">Impresora de Etiquetas/Códigos</h3>
+              </div>
+
+              <div className="space-y-4">
+                <div className="flex space-x-2">
+                  <select
+                    id="impresora_etiquetas"
+                    name="impresora_etiquetas"
+                    className="flex-1 p-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
+                    value={formData.impresora_etiquetas || ''}
+                    onChange={handleChange}
+                    disabled={!canEditSettings}
+                  >
+                    <option value="">-- Seleccionar impresora --</option>
+                    {printers.map((printer, i) => (
+                      <option key={i} value={printer.name}>
+                        {printer.name} {printer.isDefault ? '(Default)' : ''} {printer.isThermal ? '(Térmica)' : ''}
+                      </option>
+                    ))}
+                  </select>
                   <button
                     type="button"
-                    onClick={() => testPrinter('diagnostic')}
-                    disabled={!canEditSettings}
-                    className={`px-4 py-2 rounded-lg ${!canEditSettings
+                    onClick={() => testPrinter('label')}
+                    disabled={!formData.impresora_etiquetas || !canEditSettings}
+                    className={`px-4 py-2 rounded-lg ${!formData.impresora_etiquetas || !canEditSettings
                       ? 'bg-gray-200 text-gray-500 cursor-not-allowed'
                       : 'bg-green-600 text-white hover:bg-green-700'
                       }`}
                   >
-                    Diagnóstico
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => testPrinter('full')}
-                    disabled={!canEditSettings}
-                    className={`px-4 py-2 rounded-lg ${!canEditSettings
-                      ? 'bg-gray-200 text-gray-500 cursor-not-allowed'
-                      : 'bg-yellow-600 text-white hover:bg-yellow-700'
-                      }`}
-                  >
-                    Test Print
+                    Probar
                   </button>
                 </div>
-                <p className="text-sm text-gray-500 mt-1">
-                  Las impresoras marcadas como (Térmica) serán tratadas como impresoras de recibos.
-                </p>
-              </div>
 
-              {/* Printer type */}
-              <div>
-                <label htmlFor="tipo_impresora" className="block text-sm font-medium text-gray-700 mb-1">
-                  Tipo de Impresora
-                </label>
-                <select
-                  id="tipo_impresora"
-                  name="tipo_impresora"
-                  className="w-full p-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  value={formData.tipo_impresora}
-                  onChange={handleChange}
-                  disabled={!canEditSettings}
-                >
-                  <option value="normal">Impresora Normal</option>
-                  <option value="termica">Impresora Térmica 80mm</option>
-                  <option value="termica58">Impresora Térmica 58mm</option>
-                </select>
-                <p className="text-sm text-gray-500 mt-1">
-                  Seleccione el tipo de impresora que utilizará para la facturación.
-                </p>
-              </div>
-
-              {/* PDF saving options */}
-              <div className="border-t pt-4">
-                <div className="flex items-center justify-between mb-2">
-                  <label htmlFor="guardar_pdf" className="text-sm font-medium text-gray-700">
-                    Guardar copia en PDF
-                  </label>
-                  <div className="relative inline-block w-10 mr-2 align-middle select-none">
-                    <input
-                      type="checkbox"
-                      id="guardar_pdf"
-                      name="guardar_pdf"
-                      className="sr-only"
-                      checked={formData.guardar_pdf}
-                      onChange={(e) => setFormData({ ...formData, guardar_pdf: e.target.checked })}
-                      disabled={!canEditSettings}
-                    />
-                    <div className={`block w-10 h-6 rounded-full ${formData.guardar_pdf ? 'bg-blue-600' : 'bg-gray-300'} transition`}></div>
-                    <div className={`absolute left-1 top-1 bg-white w-4 h-4 rounded-full transition-transform ${formData.guardar_pdf ? 'transform translate-x-4' : ''}`}></div>
-                  </div>
+                <div className="text-sm text-gray-600">
+                  <p>Esta impresora se utilizará para imprimir etiquetas de productos y códigos de barras.</p>
+                  <p className="mt-1">Recomendamos usar una impresora de etiquetas especializada para mejor calidad.</p>
                 </div>
-
-                {formData.guardar_pdf && (
-                  <div className="mt-2">
-                    <label htmlFor="ruta_pdf" className="block text-sm font-medium text-gray-700 mb-1">
-                      Carpeta para facturas PDF
-                    </label>
-                    <div className="flex space-x-2">
-                      <input
-                        type="text"
-                        id="ruta_pdf"
-                        name="ruta_pdf"
-                        className="flex-1 p-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                        value={formData.ruta_pdf || ''}
-                        onChange={handleChange}
-                        disabled={!canEditSettings}
-                        placeholder="Carpeta para guardar facturas PDF"
-                      />
-                      <button
-                        type="button"
-                        onClick={handleOpenFolder}
-                        className="px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700"
-                      >
-                        <Folder className="h-4 w-4" />
-                      </button>
-                    </div>
-                  </div>
-                )}
               </div>
-
             </div>
+
+
+            {/* PDF Configuration */}
+            <div className="border-t pt-4">
+              <div className="flex items-center justify-between mb-2">
+                <label htmlFor="guardar_pdf" className="text-sm font-medium text-gray-700">
+                  Guardar copia en PDF
+                </label>
+                <div className="relative inline-block w-10 mr-2 align-middle select-none">
+                  <input
+                    type="checkbox"
+                    id="guardar_pdf"
+                    name="guardar_pdf"
+                    className="sr-only"
+                    checked={formData.guardar_pdf}
+                    onChange={(e) => setFormData({ ...formData, guardar_pdf: e.target.checked })}
+                    disabled={!canEditSettings}
+                  />
+                  <div className={`block w-10 h-6 rounded-full ${formData.guardar_pdf ? 'bg-blue-600' : 'bg-gray-300'} transition`}></div>
+                  <div className={`absolute left-1 top-1 bg-white w-4 h-4 rounded-full transition-transform ${formData.guardar_pdf ? 'transform translate-x-4' : ''}`}></div>
+                </div>
+              </div>
+
+              {formData.guardar_pdf && (
+                <div className="mt-2">
+                  <label htmlFor="ruta_pdf" className="block text-sm font-medium text-gray-700 mb-1">
+                    Carpeta para facturas PDF
+                  </label>
+                  <div className="flex space-x-2">
+                    <input
+                      type="text"
+                      id="ruta_pdf"
+                      name="ruta_pdf"
+                      className="flex-1 p-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      value={formData.ruta_pdf || ''}
+                      onChange={handleChange}
+                      disabled={!canEditSettings}
+                      placeholder="Carpeta para guardar facturas PDF"
+                    />
+                    <button
+                      type="button"
+                      onClick={handleOpenFolder}
+                      className="px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700"
+                    >
+                      <Folder className="h-4 w-4" />
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Diagnostics buttons */}
+            {canConfigurePrinter && (
+              <div className="border-t pt-4 flex justify-between">
+                <button
+                  type="button"
+                  onClick={() => testPrinter('diagnostic')}
+                  className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700"
+                >
+                  Ejecutar Diagnóstico
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => testPrinter('full')}
+                  className="px-4 py-2 bg-yellow-600 text-white rounded-lg hover:bg-yellow-700"
+                >
+                  Test Completo
+                </button>
+              </div>
+            )}
           </div>
         );
 
