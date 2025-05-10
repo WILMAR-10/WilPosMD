@@ -1,30 +1,54 @@
-﻿// src/pages/Configuracion.tsx 
-import React, { useState, useEffect } from 'react';
+﻿// src/pages/Configuracion.tsx - Updated with enhanced printer options
+
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Save, Settings, Printer, ChevronLeft,
   User, LogOut, Store, Phone, Mail,
   Globe, FileText, DollarSign, Calendar,
   Upload, Check, AlertTriangle, X, Folder,
-  ShieldAlert, ShieldCheck, RotateCcw, Info, Barcode
+  ShieldAlert, ShieldCheck, RotateCcw, Info,
+  Barcode
 } from 'lucide-react';
 import { useAuth } from '../services/AuthContext';
-import { useSettings, Settings as SettingsType } from '../services/DatabaseService';
+import { useSettings } from '../services/DatabaseService';
 import ConfirmDialog from '../components/ConfirmDialog';
-import ProtectedRoute from '../components/ProtectedRoute';
-import Unauthorized from '../components/Unauthorized';
 import PrinterDiagnostic from '../utils/PrinterDiagnostic';
+import ThermalPrintService from '../services/ThermalPrintService';
 
 type AlertType = 'success' | 'warning' | 'error' | 'info';
 
-// Tipado para cola de alertas
+// Type for alert queue
 type AlertItem = { id: string; type: AlertType; message: string };
 
-// Cola de alertas
 const Configuracion: React.FC = () => {
   const { user, logout, hasPermission } = useAuth();
   const { settings, loading, error: settingsError, saveSettings } = useSettings();
 
-  // Cola de alertas
+  // Form state
+  const [formData, setFormData] = useState({
+    nombre_negocio: '',
+    direccion: '',
+    telefono: '',
+    email: '',
+    rnc: '',
+    sitio_web: '',
+    mensaje_recibo: '',
+    moneda: 'RD$',
+    formato_fecha: 'DD/MM/YYYY',
+    impuesto_nombre: 'ITEBIS',
+    impuesto_porcentaje: 0.18,
+    impresora_termica: '',
+    impresora_termica_secundaria: '',
+    impresora_etiquetas: '',
+    guardar_pdf: true,
+    ruta_pdf: '',
+    tipo_impresora: 'normal' as 'normal' | 'termica' | 'termica58',
+    auto_cut: true,
+    open_cash_drawer: false,
+    logo: undefined as string | undefined
+  });
+
+  // Alert queue
   const [alerts, setAlerts] = useState<AlertItem[]>([]);
   const showAlert = (type: AlertType, message: string) => {
     const id = crypto.randomUUID();
@@ -32,15 +56,26 @@ const Configuracion: React.FC = () => {
     setTimeout(() => setAlerts(prev => prev.filter(a => a.id !== id)), 5000);
   };
 
-  // Estado para el logo
+  // Logo state
   const [logoPreview, setLogoPreview] = useState<string | null>(null);
   const [logoFile, setImageFile] = useState<File | null>(null);
 
-  // Estados para manejo de UI
+  // UI state
   const [activeTab, setActiveTab] = useState<'general' | 'facturacion' | 'usuario'>('general');
   const [isSaving, setIsSaving] = useState(false);
 
-  // Diálogo de confirmación
+  // Printer service
+  const thermalPrintService = ThermalPrintService.getInstance();
+  const printerDiagnostic = new PrinterDiagnostic();
+  
+  // Printers list
+  const [printers, setPrinters] = useState<Array<{
+    name: string;
+    isDefault?: boolean;
+    isThermal?: boolean;
+  }>>([]);
+
+  // Confirmation dialog
   const [confirmDialog, setConfirmDialog] = useState({
     isOpen: false,
     title: '',
@@ -49,16 +84,83 @@ const Configuracion: React.FC = () => {
     type: 'warning' as 'warning' | 'danger' | 'info'
   });
 
-  // Permiso de edición
+  // Permissions
   const canEditSettings = hasPermission('configuracion', 'editar');
-
-  // Check user permissions
   const canViewSettings = hasPermission('configuracion', 'ver');
   const canConfigurePrinter = hasPermission('configuracion', 'config');
 
-  // Cargar configuración inicial y datos necesarios
+  // Load initial settings and data
+  useEffect(() => {
+    const loadConfig = async () => {
+      try {
+        if (!settings) return;
+        
+        setFormData(prev => ({
+          ...prev,
+          nombre_negocio: settings.nombre_negocio || 'WilPOS',
+          direccion: settings.direccion || '',
+          telefono: settings.telefono || '',
+          email: settings.email || '',
+          rnc: settings.rnc || '',
+          sitio_web: settings.sitio_web || '',
+          mensaje_recibo: settings.mensaje_recibo || 'Gracias por su compra',
+          moneda: settings.moneda || 'RD$',
+          formato_fecha: settings.formato_fecha || 'DD/MM/YYYY',
+          impuesto_nombre: settings.impuesto_nombre || 'ITEBIS',
+          impuesto_porcentaje: settings.impuesto_porcentaje ?? 0.18,
+          impresora_termica: settings.impresora_termica || '',
+          impresora_termica_secundaria: settings.impresora_termica_secundaria || '',
+          impresora_etiquetas: settings.impresora_etiquetas || '',
+          guardar_pdf: settings.guardar_pdf ?? true,
+          ruta_pdf: settings.ruta_pdf || '',
+          tipo_impresora: settings.tipo_impresora || 'normal',
+          auto_cut: settings.auto_cut !== false, // Default to true if not set
+          open_cash_drawer: settings.open_cash_drawer || false,
+          logo: settings.logo
+        }));
+        
+        // Set logo preview if exists
+        if (settings.logo) {
+          setLogoPreview(settings.logo);
+        }
+      } catch (error) {
+        console.error('Error loading settings:', error);
+        showAlert('error', 'Error loading configuration');
+      }
+    };
 
-  // Manejar cambios en el formulario
+    loadConfig();
+  }, [settings]);
+
+  // Load printers when tab changes or initially
+  useEffect(() => {
+    const loadPrinters = async () => {
+      if (activeTab !== 'facturacion') return;
+
+      try {
+        // Get printers from service
+        const printerList = await thermalPrintService.getAvailablePrinters(true);
+        setPrinters(printerList);
+        
+        // Check current printer status
+        if (formData.impresora_termica) {
+          const status = await thermalPrintService.checkPrinterStatus(formData.impresora_termica);
+          if (!status.available) {
+            showAlert('warning', `La impresora configurada "${formData.impresora_termica}" no está disponible: ${status.message}`);
+          } else {
+            showAlert('info', `Impresora configurada: ${formData.impresora_termica}`);
+          }
+        }
+      } catch (err: any) {
+        console.error('Error loading printers:', err);
+        showAlert('error', `Error al cargar impresoras: ${err.message}`);
+      }
+    };
+
+    loadPrinters();
+  }, [activeTab, formData.impresora_termica]);
+
+  // Form change handler
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
     const { name, value, type } = e.target;
 
@@ -72,13 +174,13 @@ const Configuracion: React.FC = () => {
     }
   };
 
-  // Manejar la carga de logo
+  // Logo upload handler
   const handleLogoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
       setImageFile(file);
 
-      // Crear preview
+      // Create preview
       const reader = new FileReader();
       reader.onloadend = () => {
         setLogoPreview(reader.result as string);
@@ -87,7 +189,7 @@ const Configuracion: React.FC = () => {
     }
   };
 
-  // Eliminar logo
+  // Remove logo handler
   const handleRemoveLogo = () => {
     setLogoPreview(null);
     setImageFile(null);
@@ -97,7 +199,105 @@ const Configuracion: React.FC = () => {
     }));
   };
 
-  // Guardar configuración
+  // Test printer with different modes
+  const testPrinter = async (mode: 'basic' | 'diagnostic' | 'full' | 'secondaryLabel' | 'label' = 'basic') => {
+    let printerName: string | undefined;
+    
+    switch (mode) {
+      case 'secondaryLabel':
+        printerName = formData.impresora_termica_secundaria;
+        break;
+      case 'label':
+        printerName = formData.impresora_etiquetas;
+        break;
+      default:
+        printerName = formData.impresora_termica;
+    }
+    
+    if (!printerName) {
+      showAlert('warning', 'Por favor seleccione una impresora primero');
+      return;
+    }
+    
+    showAlert('info', `Probando impresora: ${printerName}...`);
+    
+    try {
+      switch (mode) {
+        case 'diagnostic': {
+          const result = await printerDiagnostic.runFullDiagnostic();
+          showAlert(result.status as AlertType, result.message);
+          
+          // Generate and show diagnostic report in a new window if available
+          if (window.api?.openComponentWindow) {
+            const htmlReport = await printerDiagnostic.generateDiagnosticReport();
+            // Open in new window if possible
+            const blob = new Blob([htmlReport], { type: 'text/html' });
+            const url = URL.createObjectURL(blob);
+            window.open(url, '_blank', 'width=800,height=600');
+          }
+          break;
+        }
+        case 'full': {
+          const result = await thermalPrintService.testPrinter(printerName);
+          if (result.success) {
+            showAlert('success', `Prueba completa enviada a ${printerName}`);
+          } else {
+            throw new Error(result.error || 'Error desconocido');
+          }
+          break;
+        }
+        case 'secondaryLabel':
+        case 'label': {
+          // Special test for label printer
+          const testLabel = [
+            '\x1B\x40', // Initialize
+            '\x1B\x61\x01', // Center align
+            'WILPOS ETIQUETA TEST\n\n',
+            `Impresora: ${printerName}\n`,
+            `Fecha: ${new Date().toLocaleString()}\n\n`,
+            mode === 'label' ? '\x1D\x68\x50\x1D\x77\x02\x1D\x6B\x02\x0B123456789012\x00' : '', // EAN13 barcode
+            '\x1D\x56\x00' // Cut
+          ].join('');
+          
+          const result = await thermalPrintService.printRaw(testLabel, printerName);
+          if (result.success) {
+            showAlert('success', `Prueba de etiqueta enviada a ${printerName}`);
+          } else {
+            throw new Error(result.error || 'Error desconocido');
+          }
+          break;
+        }
+        default: { // basic
+          const result = await thermalPrintService.testPrinter(printerName);
+          if (result.success) {
+            showAlert('success', `Prueba básica enviada a ${printerName}`);
+          } else {
+            throw new Error(result.error || 'Error desconocido');
+          }
+        }
+      }
+    } catch (err) {
+      console.error('Error testing printer:', err);
+      showAlert('error', err instanceof Error ? err.message : 'Error desconocido');
+    }
+  };
+
+  // Test cash drawer
+  const testCashDrawer = async () => {
+    try {
+      const result = await thermalPrintService.openCashDrawer(formData.impresora_termica);
+      if (result.success) {
+        showAlert('success', 'Comando de apertura de cajón enviado');
+      } else {
+        throw new Error(result.error || 'Error de cajón desconocido');
+      }
+    } catch (err) {
+      console.error('Error opening cash drawer:', err);
+      showAlert('error', err instanceof Error ? err.message : 'Error desconocido');
+    }
+  };
+
+  // Save settings handler
   const handleSaveSettings = async () => {
     if (!canEditSettings) {
       showAlert('error', 'No tienes permiso para modificar la configuración');
@@ -108,7 +308,7 @@ const Configuracion: React.FC = () => {
 
     try {
       // Create a clean copy of formData
-      let updatedSettings: SettingsType = { ...formData };
+      let updatedSettings = { ...formData };
 
       // Process logo if there's a new one
       if (logoFile) {
@@ -150,13 +350,12 @@ const Configuracion: React.FC = () => {
       // Save to database
       const result = await saveSettings(updatedSettings);
 
-      // Verify the save was successful by checking the returned data
+      // Verify the save was successful
       if (result) {
         showAlert('success', 'Configuración guardada con éxito');
 
         // Update the thermal print service with the new printer
-        const thermalService = ThermalPrintService.getInstance();
-        thermalService.setActivePrinter(updatedSettings.impresora_termica);
+        thermalPrintService.setActivePrinter(updatedSettings.impresora_termica);
       } else {
         throw new Error('No se recibió respuesta del servidor');
       }
@@ -168,7 +367,7 @@ const Configuracion: React.FC = () => {
     }
   };
 
-  // Helper function to convert File to base64
+  // Convert File to base64
   const convertFileToBase64 = (file: File): Promise<string> => {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
@@ -184,7 +383,7 @@ const Configuracion: React.FC = () => {
     });
   };
 
-  // Confirmar cierre de sesión
+  // Logout confirmation
   const handleLogout = () => {
     showConfirmDialog(
       'Cerrar sesión',
@@ -196,7 +395,7 @@ const Configuracion: React.FC = () => {
     );
   };
 
-  // Regresar al home
+  // Return to home
   const handleGoBack = () => {
     const event = new CustomEvent('componentChange', {
       detail: { component: 'Home' }
@@ -204,7 +403,7 @@ const Configuracion: React.FC = () => {
     window.dispatchEvent(event);
   };
 
-  // Abrir carpeta de facturas
+  // Open PDF folder
   const handleOpenFolder = async () => {
     try {
       const api = window.api;
@@ -213,12 +412,12 @@ const Configuracion: React.FC = () => {
         throw new Error("La API no está disponible");
       }
 
-      // Definir la ruta base para las facturas
+      // Define path for invoices
       const paths = await api.getAppPaths();
       const docsPath = paths.documents;
       const facturaPath = formData.ruta_pdf || `${docsPath}/WilPOS/Facturas`;
 
-      // Asegurar que la carpeta existe antes de intentar abrirla
+      // Ensure directory exists
       if (api.ensureDir) {
         const dirResult = await api.ensureDir(facturaPath);
         if (!dirResult.success) {
@@ -226,7 +425,7 @@ const Configuracion: React.FC = () => {
         }
       }
 
-      // Actualizar la ruta en el formulario si es necesario
+      // Update path in form if needed
       if (!formData.ruta_pdf) {
         setFormData(prev => ({
           ...prev,
@@ -234,7 +433,7 @@ const Configuracion: React.FC = () => {
         }));
       }
 
-      // Abrir la carpeta
+      // Open folder
       if (api.openFolder) {
         await api.openFolder(facturaPath);
         showAlert('success', 'Carpeta de facturas abierta correctamente');
@@ -248,7 +447,7 @@ const Configuracion: React.FC = () => {
     }
   };
 
-  // Mostrar diálogo de confirmación
+  // Show confirmation dialog
   const showConfirmDialog = (title: string, message: string, onConfirm: () => void, type: 'warning' | 'danger' | 'info' = 'warning') => {
     setConfirmDialog({
       isOpen: true,
@@ -259,13 +458,13 @@ const Configuracion: React.FC = () => {
     });
   };
 
-  // Componente de Alerta
+  // Alert component
   const Alert = ({ type, message }: { type: AlertType; message: string }) => {
     const colors = {
       success: { bg: 'bg-green-50', text: 'text-green-800', border: 'border-green-200', icon: Check },
       warning: { bg: 'bg-yellow-50', text: 'text-yellow-800', border: 'border-yellow-200', icon: AlertTriangle },
       error: { bg: 'bg-red-50', text: 'text-red-800', border: 'border-red-200', icon: X },
-      info: { bg: 'bg-blue-50', text: 'text-blue-800', border: 'border-blue-200', icon: AlertTriangle }
+      info: { bg: 'bg-blue-50', text: 'text-blue-800', border: 'border-blue-200', icon: Info }
     };
 
     const style = colors[type] || colors.info;
@@ -282,7 +481,7 @@ const Configuracion: React.FC = () => {
     );
   };
 
-  // Renderizado de pestañas
+  // Render tab content
   const renderTab = () => {
     switch (activeTab) {
       case 'general':

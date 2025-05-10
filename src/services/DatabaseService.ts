@@ -149,6 +149,7 @@ export interface Settings {
   impuesto_nombre?: string;
   impuesto_porcentaje?: number;
   impresora_termica?: string;
+  impresora_termica_secundaria?: string;
   guardar_pdf?: boolean;
   ruta_pdf?: string; // same if you clear ruta_pdf to undefined
   tema?: string;

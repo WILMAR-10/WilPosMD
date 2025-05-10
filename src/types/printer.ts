@@ -1,66 +1,146 @@
 // src/types/printer.ts
 
 /**
- * Tipos y estructuras para impresión ESC/POS nativa vía printer module
+ * Types related to printer functionality
  */
 
 /**
- * Enum de tipos de impresora para configuración visual
+ * Enum for printer types used in configuration
  */
 export enum PrinterType {
   STANDARD = 'normal',
-  THERMAL_80MM = 'termica80',
+  THERMAL_80MM = 'termica',
   THERMAL_58MM = 'termica58'
 }
 
 /**
- * Representa una impresora detectada en el sistema
+ * Interface for a printer device
  */
 export interface Printer {
-  /** Nombre de la impresora según el spooler del sistema */
+  /** Name of the printer in the system */
   name: string;
-  /** Si esta marcada como predeterminada */
+  /** Whether the printer is the system default */
   isDefault?: boolean;
-  /** Descripción opcional */
+  /** Description provided by the system */
   description?: string;
-  /** Indicador genérico para impresoras térmicas */
+  /** Whether the printer is detected as a thermal receipt printer */
   isThermal?: boolean;
-  
+  /** Port information if available */
   portName?: string;
 }
 
 /**
- * Parámetros para impresión RAW (ESC/POS)
+ * Options for printing documents
  */
-export interface RawPrintOptions {
-  /** Secuencia ESC/POS en string o bytes */
-  data: string | Uint8Array;
-  /** Nombre de la impresora; si null, usa la predeterminada */
-  printerName?: string | null;
+export interface PrintOptions {
+  /** HTML content to print */
+  html?: string;
+  /** Raw text/buffer to print */
+  data?: string | Uint8Array;
+  /** Printer to use - if not specified, uses default */
+  printerName?: string;
+  /** Whether to show the printer dialog */
+  silent?: boolean;
+  /** Number of copies to print */
+  copies?: number;
+  /** Additional printer-specific options */
+  options?: {
+    /** Paper width for thermal printers */
+    paperWidth?: string;
+    /** Print speed setting */
+    printSpeed?: string;
+    /** Font size for printing */
+    fontSize?: string;
+    /** Indicate this is a thermal receipt printer */
+    thermalPrinter?: boolean;
+    /** Any other printer-specific options */
+    [key: string]: any;
+  };
 }
 
 /**
- * Resultado genérico de una operación de impresión RAW
+ * Options for saving PDF files
+ */
+export interface SavePdfOptions {
+  /** Output path for the PDF */
+  path: string;
+  /** HTML content to convert */
+  html: string;
+  /** PDF generation options */
+  options?: {
+    /** Include background colors/images */
+    printBackground?: boolean;
+    /** Page margins */
+    margins?: {
+      top: number;
+      bottom: number;
+      left: number;
+      right: number;
+    };
+    /** Page format */
+    format?: string;
+    /** Other PDF options */
+    [key: string]: any;
+  };
+}
+
+/**
+ * Result of a printing operation
  */
 export interface PrintResult {
-  /** Éxito al enviar datos a la impresora */
+  /** Whether the print operation was successful */
   success: boolean;
-  /** Identificador de job en el spooler (si aplica) */
+  /** ID assigned by the print system if applicable */
   jobID?: number | string;
-  /** Mensaje de error en caso de fallo */
+  /** Error message if printing failed */
+  error?: string;
+  /** Message about the print operation */
+  message?: string;
+}
+
+/**
+ * Result of a PDF save operation
+ */
+export interface SavePdfResult {
+  /** Whether the save operation was successful */
+  success: boolean;
+  /** Path where the PDF was saved */
+  path?: string;
+  /** Error message if saving failed */
   error?: string;
 }
 
 /**
- * Estado básico de la impresora para UI
+ * Status of a printer
  */
 export interface PrinterStatus {
-  /** Disponible o no */
+  /** Whether the printer is available */
   available: boolean;
-  /** Nombre de la impresora configurada */
+  /** Name of the printer checked */
   printerName?: string;
-  /** Mensaje informativo */
+  /** Message about the printer status */
   message?: string;
-  /** Error si ocurrió alguno */
+  /** Error details if any */
   error?: string;
+}
+
+/**
+ * Options for printing an invoice
+ */
+export interface PrintInvoiceOptions {
+  /** Printer to use */
+  printerName?: string;
+  /** Whether to show the printer dialog */
+  silent?: boolean;
+  /** Number of copies to print */
+  copies?: number;
+  /** Printer-specific options */
+  options?: {
+    /** Paper width for thermal printers */
+    paperWidth?: string;
+    /** Print speed setting */
+    printSpeed?: string;
+    /** Other options */
+    [key: string]: any;
+  };
 }

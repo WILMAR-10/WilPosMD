@@ -1,7 +1,7 @@
 {
   "name": "wilpos",
   "version": "1.0.0",
-  "description": "",
+  "description": "WilPOS Point of Sale System",
   "main": "main.js",
   "type": "module",
   "scripts": {
@@ -14,7 +14,7 @@
     "postinstall": "electron-builder install-app-deps",
     "test": "vitest"
   },
-  "keywords": [],
+  "keywords": ["pos", "point-of-sale", "thermal-printer", "receipt-printer", "electron"],
   "author": "",
   "license": "MIT",
   "devDependencies": {
@@ -41,11 +41,16 @@
     "@types/react-datepicker": "^6.2.0",
     "better-sqlite3": "^11.9.1",
     "cheerio": "^1.0.0",
+    "escpos": "^3.0.0-alpha.6",
+    "escpos-usb": "^3.0.0-alpha.4",
+    "fs-extra": "^11.2.0",
+    "iconv-lite": "^0.6.3",
     "lucide-react": "^0.487.0",
     "node-thermal-printer": "^4.4.5",
     "pdfkit": "^0.17.0",
     "postcss": "^8.5.3",
     "printer": "^0.5.0",
+    "qr-image": "^3.2.0",
     "react": "^19.1.0",
     "react-datepicker": "^8.3.0",
     "react-dom": "^19.1.0",
@@ -74,7 +79,7 @@
     "files": [
       "dist/**/*",
       "main.js",
-      "preload.js",
+      "preload.cjs",
       "schema.sql",
       "assets/**/*"
     ],
@@ -83,6 +88,39 @@
     },
     "extraResources": [
       "schema.sql"
-    ]
+    ],
+    "extraFiles": [
+      {
+        "from": "node_modules/escpos/node_modules/mutable-buffer/dist",
+        "to": "resources/escpos"
+      }
+    ],
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "icon": "assets/images/icons/logo.ico"
+    },
+    "mac": {
+      "category": "public.app-category.business",
+      "target": [
+        "dmg"
+      ],
+      "icon": "assets/images/icons/logo.icns"
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "Office",
+      "icon": "assets/images/icons/logo.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "installerIcon": "assets/images/icons/logo.ico"
+    }
   }
 }

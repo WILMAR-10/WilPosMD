@@ -1,4 +1,4 @@
-// preload.cjs - Updated with proper printer integration
+// preload.cjs - Enhanced with printer support
 
 const { contextBridge, ipcRenderer } = require('electron');
 
@@ -81,5 +81,113 @@ contextBridge.exposeInMainWorld('api', {
     });
   },
   unregisterSyncListener: () => ipcRenderer.removeAllListeners('sync-event'),
-  broadcastSyncEvent: event => ipcRenderer.send('broadcast-sync-event', event)
+  broadcastSyncEvent: event => ipcRenderer.send('broadcast-sync-event', event),
+  
+  // Printer related functions
+  getPrinters: () => ipcRenderer.invoke('get-printers'),
+  testPrinter: (printerName) => ipcRenderer.invoke('test-printer', { printerName }),
+  printRaw: (text, printerName) => ipcRenderer.invoke('print-raw', { data: text, printerName }),
+  savePdf: (options) => ipcRenderer.invoke('save-pdf', options)
+});
+
+// Expose dedicated printer API with better error handling
+contextBridge.exposeInMainWorld('printerApi', {
+  // Get all available printers
+  getPrinters: async () => {
+    try {
+      const printers = await ipcRenderer.invoke('get-printers');
+      return { 
+        success: true,
+        printers: Array.isArray(printers) ? printers : [] 
+      };
+    } catch (error) {
+      console.error('Error getting printers:', error);
+      return { 
+        success: false, 
+        printers: [],
+        error: error?.message || 'Unknown error getting printers'
+      };
+    }
+  },
+  
+  // Print HTML content
+  print: async (options) => {
+    try {
+      return await ipcRenderer.invoke('print', options);
+    } catch (error) {
+      console.error('Error in print:', error);
+      return { 
+        success: false,
+        error: error?.message || 'Unknown error in print'
+      };
+    }
+  },
+  
+  // Save as PDF
+  savePdf: async (options) => {
+    try {
+      return await ipcRenderer.invoke('save-pdf', options);
+    } catch (error) {
+      console.error('Error in savePdf:', error);
+      return {
+        success: false,
+        error: error?.message || 'Unknown error saving PDF'
+      };
+    }
+  },
+  
+  // Print raw ESC/POS commands
+  printRaw: async (data, printerName) => {
+    try {
+      // Handle both string and Uint8Array input
+      const payload = { 
+        data: data,
+        printerName: printerName
+      };
+      
+      return await ipcRenderer.invoke('print-raw', payload);
+    } catch (error) {
+      console.error('Error in printRaw:', error);
+      return { 
+        success: false,
+        error: error?.message || 'Unknown error in printRaw'
+      };
+    }
+  },
+  
+  // Test printer
+  testPrinter: async (printerName) => {
+    try {
+      return await ipcRenderer.invoke('test-printer', { printerName });
+    } catch (error) {
+      console.error('Error testing printer:', error);
+      return {
+        success: false,
+        error: error?.message || 'Unknown error testing printer'
+      };
+    }
+  },
+  
+  // Open cash drawer
+  openCashDrawer: async (printerName) => {
+    try {
+      return await ipcRenderer.invoke('open-cash-drawer', { printerName });
+    } catch (error) {
+      console.error('Error opening cash drawer:', error);
+      return {
+        success: false,
+        error: error?.message || 'Unknown error opening cash drawer'
+      };
+    }
+  },
+  
+  // Get default PDF path
+  getPdfPath: async () => {
+    try {
+      return await ipcRenderer.invoke('get-pdf-path');
+    } catch (error) {
+      console.error('Error getting PDF path:', error);
+      return null;
+    }
+  }
 });
