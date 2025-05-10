@@ -1,5 +1,4 @@
-// preload.cjs - Enhanced with printer support
-
+// preload.cjs 
 const { contextBridge, ipcRenderer } = require('electron');
 
 // Expose version info
@@ -92,70 +91,64 @@ contextBridge.exposeInMainWorld('api', {
 
 // Expose dedicated printer API with better error handling
 contextBridge.exposeInMainWorld('printerApi', {
-  // Get all available printers
+  // Obtener todas las impresoras
   getPrinters: async () => {
     try {
       const printers = await ipcRenderer.invoke('get-printers');
-      return { 
+      return {
         success: true,
-        printers: Array.isArray(printers) ? printers : [] 
+        printers: Array.isArray(printers) ? printers : []
       };
     } catch (error) {
       console.error('Error getting printers:', error);
-      return { 
-        success: false, 
+      return {
+        success: false,
         printers: [],
         error: error?.message || 'Unknown error getting printers'
       };
     }
   },
-  
-  // Print HTML content
-  print: async (options) => {
+
+  // Imprimir contenido HTML
+  print: async (items, options) => {
     try {
-      return await ipcRenderer.invoke('print', options);
+      return await ipcRenderer.invoke('print-content', { items, options });
     } catch (error) {
-      console.error('Error in print:', error);
-      return { 
+      console.error('Error printing content:', error);
+      return {
         success: false,
-        error: error?.message || 'Unknown error in print'
+        error: error?.message || 'Unknown error printing content'
       };
     }
   },
-  
-  // Save as PDF
-  savePdf: async (options) => {
+
+  // Guardar como PDF
+  savePdf: async (html, path, options) => {
     try {
-      return await ipcRenderer.invoke('save-pdf', options);
+      return await ipcRenderer.invoke('save-pdf', { html, path, options });
     } catch (error) {
-      console.error('Error in savePdf:', error);
+      console.error('Error saving PDF:', error);
       return {
         success: false,
         error: error?.message || 'Unknown error saving PDF'
       };
     }
   },
-  
-  // Print raw ESC/POS commands
+
+  // Imprimir comandos crudos ESC/POS
   printRaw: async (data, printerName) => {
     try {
-      // Handle both string and Uint8Array input
-      const payload = { 
-        data: data,
-        printerName: printerName
-      };
-      
-      return await ipcRenderer.invoke('print-raw', payload);
+      return await ipcRenderer.invoke('print-raw', { data, printerName });
     } catch (error) {
       console.error('Error in printRaw:', error);
-      return { 
+      return {
         success: false,
         error: error?.message || 'Unknown error in printRaw'
       };
     }
   },
-  
-  // Test printer
+
+  // Probar impresora
   testPrinter: async (printerName) => {
     try {
       return await ipcRenderer.invoke('test-printer', { printerName });
@@ -167,8 +160,8 @@ contextBridge.exposeInMainWorld('printerApi', {
       };
     }
   },
-  
-  // Open cash drawer
+
+  // Abrir cajón de dinero
   openCashDrawer: async (printerName) => {
     try {
       return await ipcRenderer.invoke('open-cash-drawer', { printerName });
@@ -180,8 +173,8 @@ contextBridge.exposeInMainWorld('printerApi', {
       };
     }
   },
-  
-  // Get default PDF path
+
+  // Obtener ruta predeterminada para PDF
   getPdfPath: async () => {
     try {
       return await ipcRenderer.invoke('get-pdf-path');
