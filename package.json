@@ -62,6 +62,7 @@
     "react-dom": "^19.1.0",
     "react-icons": "^5.5.0",
     "react-router-dom": "^7.5.0",
+    "receiptline": "^1.16.2",
     "serialport": "^13.0.0",
     "sqlite3": "^5.1.7",
     "tailwindcss": "^4.1.6",

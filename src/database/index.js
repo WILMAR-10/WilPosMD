@@ -832,4 +832,20 @@ export async function getTopProductsData(startDate, endDate, limit = 10) {
       console.error('Error getting top products data:', error);
       throw new Error(`Failed to retrieve top products: ${error.message}`);
     }
-  }
+}
+
+// al final del fichero, exporta la función que monta tu esquema / abre la conexión:
+async function initializeDatabase() {
+  // aquí abres tu DB, ejecutas schema.sql, migrations, etc.
+  const db = abrirConexión(); 
+  await ejecutarEsquema(db);
+  return true;
+}
+
+module.exports = {
+  initializeDatabase,
+  getSalesReportData,
+  getTopProductsData,
+  setupIpcHandlers,
+  closeDB
+};

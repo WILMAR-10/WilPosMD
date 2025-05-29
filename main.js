@@ -1,96 +1,310 @@
-//  main.js ESM module
+// main.js - Versión simplificada aplicando principios SOLID y DRY
 import { app, BrowserWindow, ipcMain, shell, session } from 'electron';
 import path, { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs-extra';
 import { createRequire } from 'module';
 
-// Legacy require support for CommonJS modules
-const requireModule = createRequire(import.meta.url);
-
-// Import PosPrinter de electron-pos-printer
-let PosPrinter = null;
-try {
-  ({ PosPrinter } = requireModule('electron-pos-printer'));
-  console.log('✅ electron-pos-printer loaded');
-} catch (err) {
-  console.warn('⚠️ electron-pos-printer not found:', err);
-}
-
-// Try to load printer module dynamically
-let printer = null;
-try {
-  printer = requireModule('printer');
-  console.log('✅ printer module loaded:', !!printer);
-} catch (err) {
-  console.warn('⚠️ printer module not found:', err);
-}
-
-// DIRECT PRINTER TEST - logs all available printers via the native module
-if (printer) {
-  try {
-    const printers = printer.getPrinters();
-    console.log(
-      'DIRECT PRINTER TEST - Available printers:',
-      JSON.stringify(printers, null, 2)
-    );
-  } catch (err) {
-    console.error('DIRECT PRINTER TEST - Failed:', err);
-  }
-} else {
-  console.error('DIRECT PRINTER TEST - printer module not available');
-}
-
-// Import database functions
+// Database imports
 import {
   initializeDatabase,
   setupIpcHandlers,
   closeDB
 } from './src/database/index.js';
 
-// Determine environment and paths
+// ESC/POS printer support
+const requireModule = createRequire(import.meta.url);
+let escPrinter = null;
+
+try {
+  // Intentar cargar node-escpos-print
+  escPrinter = requireModule('node-escpos-print');
+  console.log('✅ node-escpos-print cargado correctamente');
+} catch (err) {
+  console.warn('⚠️ node-escpos-print no disponible:', err.message);
+}
+
+// Constantes
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged;
 const windowCache = new Map();
 let mainWindow = null;
 
-console.log("🚀 Starting WilPOS app");
-console.log("📂 App Path:", __dirname);
-console.log("🔧 Dev Mode:", isDev);
+console.log("🚀 Iniciando WilPOS");
+console.log("📂 Ruta de la app:", __dirname);
+console.log("🔧 Modo desarrollo:", isDev);
 
-// Utility: Safe IPC registration
+/**
+ * Utilidad para registro seguro de handlers IPC - Principio DRY
+ */
 function safeHandle(channel, handler) {
-  try { ipcMain.removeHandler(channel); } catch {}
-  ipcMain.handle(channel, handler);
-}
-
-// Register window control
-function registerWindowControl(eventName, actionFn) {
-  safeHandle(eventName, (event) => {
+  try { 
+    ipcMain.removeHandler(channel); 
+  } catch {} // Ignorar errores si no existe
+  
+  ipcMain.handle(channel, async (event, ...args) => {
     try {
-      const win = BrowserWindow.fromWebContents(event.sender);
-      if (!win || win.isDestroyed()) throw new Error(`Window not found for ${eventName}`);
-      return actionFn(win);
-    } catch (err) {
-      console.error(`Error in ${eventName}:`, err);
-      return false;
+      return await handler(event, ...args);
+    } catch (error) {
+      console.error(`Error en handler ${channel}:`, error);
+      return { success: false, error: error.message };
     }
   });
 }
 
+/**
+ * Configuración de controles de ventana - Principio de Responsabilidad Única
+ */
 function setupWindowControls() {
-  registerWindowControl('minimize', win => { win.minimize(); return true; });
-  registerWindowControl('maximize', win => {
-    if (win.isMaximized()) { win.unmaximize(); return false; }
-    win.maximize(); return true;
-  });
-  registerWindowControl('close', win => { win.close(); return true; });
+  const createWindowHandler = (action) => (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    if (!win || win.isDestroyed()) {
+      throw new Error('Ventana no encontrada');
+    }
+    return action(win);
+  };
+
+  safeHandle('minimize', createWindowHandler(win => { win.minimize(); return true; }));
+  safeHandle('maximize', createWindowHandler(win => {
+    if (win.isMaximized()) {
+      win.unmaximize();
+      return false;
+    }
+    win.maximize();
+    return true;
+  }));
+  safeHandle('close', createWindowHandler(win => { win.close(); return true; }));
 }
 
-// Create main window
+/**
+ * Servicio de impresión simplificado - Principio de Responsabilidad Única
+ */
+class PrinterService {
+  constructor() {
+    this.setupHandlers();
+  }
+
+  setupHandlers() {
+    // Obtener lista de impresoras
+    safeHandle('get-printers', async () => {
+      if (!escPrinter) {
+        return { success: false, error: 'Módulo de impresión no disponible' };
+      }
+
+      try {
+        const printers = escPrinter.getPrinters();
+        return printers.map(printer => ({
+          name: printer.name,
+          isDefault: printer.isDefault || false,
+          status: printer.status || 'available'
+        }));
+      } catch (error) {
+        console.error('Error obteniendo impresoras:', error);
+        return [];
+      }
+    });
+
+    // Imprimir texto raw (ESC/POS)
+    safeHandle('print-raw', async (event, data, printerName) => {
+      if (!escPrinter) {
+        return { success: false, error: 'Módulo de impresión no disponible' };
+      }
+
+      try {
+        const buffer = typeof data === 'string' ? Buffer.from(data, 'utf8') : data;
+        
+        await escPrinter.print({
+          data: buffer,
+          printer: printerName || undefined,
+          type: 'RAW'
+        });
+
+        return { success: true };
+      } catch (error) {
+        console.error('Error imprimiendo:', error);
+        return { success: false, error: error.message };
+      }
+    });
+
+    // Prueba de impresión
+    safeHandle('test-printer', async (event, { printerName }) => {
+      if (!escPrinter) {
+        return { success: false, error: 'Módulo de impresión no disponible' };
+      }
+
+      try {
+        const testData = [
+          '\x1B\x40',          // Inicializar
+          '\x1B\x61\x01',     // Centrar
+          '\x1B\x45\x01',     // Negrita
+          'PRUEBA WilPOS\n',
+          '\x1B\x45\x00',     // Normal
+          `Fecha: ${new Date().toLocaleString()}\n`,
+          '\n\nPrueba exitosa!\n\n',
+          '\x1D\x56\x00'      // Cortar papel
+        ].join('');
+
+        await escPrinter.print({
+          data: Buffer.from(testData, 'utf8'),
+          printer: printerName || undefined,
+          type: 'RAW'
+        });
+
+        return { success: true };
+      } catch (error) {
+        console.error('Error en prueba de impresión:', error);
+        return { success: false, error: error.message };
+      }
+    });
+
+    // Guardar PDF
+    safeHandle('save-pdf', async (event, { html, path: outPath, options }) => {
+      try {
+        const win = new BrowserWindow({ show: false, webPreferences: { nodeIntegration: false } });
+        
+        await win.loadURL(`data:text/html,${encodeURIComponent(html)}`);
+        
+        const pdfOptions = {
+          printBackground: true,
+          margins: { top: 0, bottom: 0, left: 0, right: 0 },
+          ...options
+        };
+        
+        const pdf = await win.webContents.printToPDF(pdfOptions);
+        await fs.ensureDir(dirname(outPath));
+        await fs.writeFile(outPath, pdf);
+        
+        win.destroy();
+        
+        return { success: true, path: outPath };
+      } catch (error) {
+        console.error('Error guardando PDF:', error);
+        return { success: false, error: error.message };
+      }
+    });
+  }
+}
+
+/**
+ * Servicio de gestión de ventanas - Principio de Responsabilidad Única
+ */
+class WindowService {
+  constructor() {
+    this.setupHandlers();
+  }
+
+  setupHandlers() {
+    // Identificar ventana actual
+    safeHandle('identifyWindow', (event) => {
+      const win = BrowserWindow.fromWebContents(event.sender);
+      if (!win) {
+        return { type: "unknown", error: "Ventana no encontrada" };
+      }
+
+      const url = event.sender.getURL();
+      let component = null;
+
+      try {
+        const urlObj = new URL(url);
+        component = urlObj.searchParams.get('component');
+      } catch (e) {
+        console.error("Error parseando URL:", e);
+      }
+
+      return {
+        type: component ? 'component' : 'main',
+        id: win.id,
+        component
+      };
+    });
+
+    // Abrir ventana de componente
+    safeHandle('openComponentWindow', async (event, componentName) => {
+      // Reutilizar ventana existente si está disponible
+      if (windowCache.has(componentName)) {
+        const cachedWin = windowCache.get(componentName);
+        if (!cachedWin.isDestroyed()) {
+          cachedWin.focus();
+          return { windowId: cachedWin.id, cached: true, success: true };
+        }
+        windowCache.delete(componentName);
+      }
+
+      // Crear nueva ventana
+      const newWin = new BrowserWindow({
+        width: 1000,
+        height: 700,
+        show: true,
+        frame: false,
+        webPreferences: {
+          preload: join(__dirname, 'preload.cjs'),
+          nodeIntegration: false,
+          contextIsolation: true,
+          sandbox: false
+        }
+      });
+
+      const loadUrl = isDev
+        ? `http://localhost:3000/?component=${encodeURIComponent(componentName)}`
+        : `file://${join(__dirname, 'dist/index.html')}?component=${encodeURIComponent(componentName)}`;
+
+      await newWin.loadURL(loadUrl);
+      windowCache.set(componentName, newWin);
+
+      // Limpiar cache cuando se cierre
+      newWin.on('closed', () => {
+        windowCache.delete(componentName);
+      });
+
+      return { windowId: newWin.id, cached: false, success: true };
+    });
+  }
+}
+
+/**
+ * Servicio de sistema de archivos - Principio de Responsabilidad Única
+ */
+class FileService {
+  constructor() {
+    this.setupHandlers();
+  }
+
+  setupHandlers() {
+    // Abrir carpeta
+    safeHandle('openFolder', async (event, folderPath) => {
+      await fs.ensureDir(folderPath);
+      await shell.openPath(folderPath);
+      return true;
+    });
+
+    // Asegurar que directorio existe
+    safeHandle('ensureDir', async (event, folderPath) => {
+      await fs.ensureDir(folderPath);
+      return { success: true };
+    });
+
+    // Obtener rutas de la aplicación
+    safeHandle('getAppPaths', () => ({
+      userData: app.getPath('userData'),
+      documents: app.getPath('documents'),
+      downloads: app.getPath('downloads'),
+      temp: app.getPath('temp'),
+      exe: app.getPath('exe'),
+      appData: app.getPath('appData'),
+      appPath: app.getAppPath()
+    }));
+  }
+}
+
+/**
+ * Crear ventana principal
+ */
 function createMainWindow() {
   mainWindow = new BrowserWindow({
-    width: 1200, height: 800, minWidth: 800, minHeight: 600,
+    width: 1200,
+    height: 800,
+    minWidth: 800,
+    minHeight: 600,
     frame: false,
     webPreferences: {
       preload: join(__dirname, 'preload.cjs'),
@@ -104,231 +318,88 @@ function createMainWindow() {
   const url = isDev
     ? 'http://localhost:3000'
     : `file://${join(__dirname, 'dist/index.html')}`;
-  console.log('Loading URL:', url);
+
+  console.log('Cargando URL:', url);
 
   mainWindow.webContents.on('did-fail-load', () => {
-    console.error('Failed to load URL:', url);
-    mainWindow.loadURL('data:text/html,<h1>Error</h1><p>Failed to load application.</p>');
+    console.error('Error cargando URL:', url);
+    mainWindow.loadURL('data:text/html,<h1>Error</h1><p>No se pudo cargar la aplicación.</p>');
   });
 
   mainWindow.loadURL(url);
-  if (isDev) mainWindow.webContents.openDevTools();
+  
+  if (isDev) {
+    mainWindow.webContents.openDevTools();
+  }
 }
 
-// Set up printer-related IPC handlers
-function setupPrinterHandlers() {
-  // Listar impresoras
-  safeHandle('get-printers', async () => {
-    const win = BrowserWindow.getAllWindows()[0];
-    let list = [];
-    try { list = await win.webContents.getPrintersAsync(); } catch {};
-    return list;
-  });
-
-  // Probar impresora
-  safeHandle('test-printer', async (event, { printerName }) => {
-    if (!printerName) {
-      return { success: false, error: 'No se especificó el nombre de la impresora.' };
-    }
-    try {
-      console.log(`Probando impresora: ${printerName}`);
-      const testContent = [
-        { type: 'text', value: `Prueba de impresora: ${printerName}\n`, style: 'text-align:center;' },
-        { type: 'text', value: `Fecha: ${new Date().toLocaleString()}\n`, style: 'text-align:center;' },
-      ];
-      const options = { printerName, silent: true, preview: false };
-      await PosPrinter.print(testContent, options);
-      return { success: true };
-    } catch (error) {
-      console.error(`Error al probar la impresora "${printerName}":`, error);
-      return { success: false, error: error.message };
-    }
-  });
-
-  // Imprimir con electron-pos-printer
-  safeHandle('print-content', async (event, { items, options }) => {
-    try {
-      await PosPrinter.print(items, { ...options, preview: false, silent: true });
-      return { success: true };
-    } catch (error) {
-      console.error('print-content error', error);
-      return { success: false, error: error.message };
-    }
-  });
-
-  // Imprimir comandos ESC/POS (RAW)
-  safeHandle('print-raw', async (event, { data, printerName }) => {
-    try {
-      const buffer = Buffer.isBuffer(data) ? data : Buffer.from(data);
-      const jobId = await PosPrinter.print([{ type: 'raw', format: buffer }], { printerName, silent: true });
-      return { success: true, jobId };
-    } catch (error) {
-      console.error('print-raw error', error);
-      return { success: false, error: error.message };
-    }
-  });
-
-  // Abrir cajón de dinero (pulse drawer)
-  safeHandle('open-cash-drawer', (event, { printerName }) => {
-    const drawerCmd = Buffer.from([0x1B, 0x70, 0x00, 0x32, 0x32]);
-    return ipcMain.handle('print-raw', { data: drawerCmd, printerName });
-  });
-
-  // Generar PDF en carpeta de facturas
-  safeHandle('save-pdf', async (event, { html, path: outPath, options }) => {
-    const win = new BrowserWindow({ show: false });
-    await win.loadURL(`data:text/html,${encodeURIComponent(html)}`);
-    const pdf = await win.webContents.printToPDF({ printBackground: true, ...(options || {}) });
-    await fs.ensureDir(dirname(outPath));
-    await fs.writeFile(outPath, pdf);
-    win.destroy();
-    return { success: true, path: outPath };
-  });
-}
-
-// IPC: Identificar ventana desde el renderer
-ipcMain.handle('identifyWindow', (event) => {
-  try {
-    const win = BrowserWindow.fromWebContents(event.sender);
-    if (!win) {
-      throw new Error("Window not found");
-    }
-
-    const url = event.sender.getURL();
-    let component = null;
-
-    try {
-      const urlObj = new URL(url);
-      component = urlObj.searchParams.get('component');
-    } catch (e) {
-      console.error("Error parsing URL:", e);
-    }
-
-    return {
-      type: component ? 'component' : 'main',
-      id: win.id,
-      component
-    };
-  } catch (error) {
-    console.error("Error identifying window:", error);
-    return { type: "unknown", error: error.message };
-  }
-});
-
-// Abre o reutiliza una ventana para un componente dado
-safeHandle('openComponentWindow', async (event, componentName) => {
-  try {
-    // Si ya hay una ventana para ese componente y no está destruida, la reusamos
-    if (windowCache.has(componentName)) {
-      const cachedWin = windowCache.get(componentName);
-      if (!cachedWin.isDestroyed()) {
-        cachedWin.focus();
-        return { windowId: cachedWin.id, cached: true, success: true };
-      }
-    }
-
-    // Si no, creamos una nueva
-    const newWin = new BrowserWindow({
-      width: 800, 
-      height: 600, 
-      show: true,
-      frame: false,
-      webPreferences: {
-        preload: join(__dirname, 'preload.cjs'),
-        nodeIntegration: false,
-        contextIsolation: true,
-        sandbox: false
-      }
-    });
-
-    const loadUrl = isDev
-      ? `http://localhost:3000/?component=${encodeURIComponent(componentName)}`
-      : `file://${join(__dirname, 'dist/index.html')}?component=${encodeURIComponent(componentName)}`;
-
-    await newWin.loadURL(loadUrl);
-    windowCache.set(componentName, newWin);
-
-    // Cuando se cierre, lo quitamos del cache
-    newWin.on('closed', () => {
-      windowCache.delete(componentName);
-    });
-
-    return { windowId: newWin.id, cached: false, success: true };
-  } catch (err) {
-    console.error('openComponentWindow error:', err);
-    return { success: false, error: err.message };
-  }
-});
-
-// IPC: Open folder
-safeHandle('openFolder', async (_, folderPath) => {
-  try {
-    await fs.ensureDir(folderPath);
-    await shell.openPath(folderPath);
-    return true;
-  } catch (err) {
-    console.error('openFolder error:', err);
-    return false;
-  }
-});
-
-// IPC: Ensure directory exists
-safeHandle('ensureDir', async (_, folderPath) => {
-  try {
-    await fs.ensureDir(folderPath);
-    return { success: true };
-  } catch (err) {
-    console.error('ensureDir error:', err);
-    return { success: false, error: err.message };
-  }
-});
-
-// IPC: App paths
-safeHandle('getAppPaths', () => ({
-  userData: app.getPath('userData'),
-  documents: app.getPath('documents'),
-  downloads: app.getPath('downloads'),
-  temp: app.getPath('temp'),
-  exe: app.getPath('exe'),
-  appData: app.getPath('appData'),
-  appPath: app.getAppPath()
-}));
-
-// Lifecycle
+/**
+ * Inicialización de la aplicación
+ */
 app.whenReady().then(async () => {
   try {
+    // Limpiar cache
     await session.defaultSession.clearCache();
-    console.log('🧹 Session cache cleared');
+    console.log('🧹 Cache de sesión limpiado');
 
+    // Inicializar base de datos
     await initializeDatabase();
-    setupIpcHandlers();
-    setupWindowControls();
-    setupPrinterHandlers();
+    console.log('✅ Base de datos inicializada');
 
+    // Configurar servicios
+    setupIpcHandlers(); // Handlers de base de datos
+    setupWindowControls();
+    new PrinterService();
+    new WindowService();
+    new FileService();
+    console.log('✅ Servicios configurados');
+
+    // Crear ventana principal
     createMainWindow();
 
     app.on('activate', () => {
-      if (BrowserWindow.getAllWindows().length === 0) createMainWindow();
+      if (BrowserWindow.getAllWindows().length === 0) {
+        createMainWindow();
+      }
     });
   } catch (err) {
-    console.error('Startup error:', err);
+    console.error('❌ Error en inicialización:', err);
     app.quit();
   }
 });
 
+/**
+ * Eventos del ciclo de vida de la aplicación
+ */
 app.on('window-all-closed', () => {
   app.quit();
 });
 
 app.on('before-quit', () => {
-  windowCache.forEach(win => { if (!win.isDestroyed()) win.destroy(); });
+  // Cerrar todas las ventanas en cache
+  windowCache.forEach(win => {
+    if (!win.isDestroyed()) {
+      win.destroy();
+    }
+  });
   windowCache.clear();
-  try { closeDB(); } catch {}
+  
+  // Cerrar base de datos
+  try {
+    closeDB();
+  } catch (error) {
+    console.error('Error cerrando base de datos:', error);
+  }
 });
 
 app.on('will-quit', () => {
+  // Limpiar archivos temporales
   const tempDir = join(app.getPath('temp'), 'wilpos-prints');
   try {
-    if (fs.existsSync(tempDir)) fs.rmSync(tempDir, { recursive: true, force: true });
-  } catch {}
+    if (fs.existsSync(tempDir)) {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  } catch (error) {
+    console.error('Error limpiando archivos temporales:', error);
+  }
 });

@@ -1,5 +1,6 @@
 // src/utils/PrinterDiagnostic.ts
 import ThermalPrintService from '../services/ThermalPrintService';
+import ReceiptLineService from '../services/ReceiptLineService';
 import { PrinterStatus } from '../types/printer';
 
 export interface DiagnosticResult {
@@ -18,92 +19,120 @@ export interface DiagnosticResult {
 }
 
 /**
- * Utility class for diagnosing printer issues
- * Provides tools for testing and troubleshooting printer connections
+ * Clase utilitaria para diagnosticar problemas de impresora
+ * Proporciona herramientas para probar y solucionar problemas de conexión de impresoras
  */
 export class PrinterDiagnostic {
   private thermalPrintService: ThermalPrintService;
+  private receiptLineService: ReceiptLineService;
   
   constructor() {
     this.thermalPrintService = ThermalPrintService.getInstance();
+    this.receiptLineService = ReceiptLineService.getInstance();
   }
   
   /**
-   * Run a complete diagnostic on the printing system
-   * Checks available printers, settings, and attempts test prints
+   * Ejecutar un diagnóstico completo en el sistema de impresión
+   * Comprueba impresoras disponibles, configuración y realiza pruebas de impresión
    */
   public async runFullDiagnostic(): Promise<DiagnosticResult> {
     try {
-      // Check system environment
+      // Comprobar entorno del sistema
       const systemInfo = await this.getSystemInfo();
       
-      // Get all available printers
-      const printers = await this.thermalPrintService.getAvailablePrinters();
+      // Obtener todas las impresoras disponibles (usando ambos servicios)
+      const printersThermal = await this.thermalPrintService.getAvailablePrinters(true);
+      const printersReceiptLine = await this.receiptLineService.getAvailablePrinters(true);
+      
+      // Unificar lista de impresoras (eliminar duplicados por nombre)
+      const printerNames = new Set();
+      let printers = [...printersThermal];
+      
+      for (const printer of printersReceiptLine) {
+        if (!printerNames.has(printer.name)) {
+          printers.push(printer);
+          printerNames.add(printer.name);
+        }
+      }
       
       if (!printers || printers.length === 0) {
         return {
           status: 'error',
-          message: 'No printers detected in the system',
+          message: 'No se detectaron impresoras en el sistema',
           systemInfo
         };
       }
       
-      // Detect USB printers
+      // Detectar impresoras USB
       const usbPrinters = printers.filter(p =>
         (p.portName?.toLowerCase().includes('usb')) ||
         (p.name.toLowerCase().includes('usb')) ||
         (p.name.toLowerCase().includes('80mm'))
       );
-      console.log('USB printers detected:', usbPrinters);
+      console.log('Impresoras USB detectadas:', usbPrinters);
 
-      // Get current printer status
-      const activePrinter = this.thermalPrintService.activePrinter;
+      // Obtener estado actual de la impresora
+      // Intentar con ambos servicios
+      const activePrinter = this.receiptLineService.activePrinter || this.thermalPrintService.activePrinter;
       const printerStatus = activePrinter ? 
-        await this.thermalPrintService.checkPrinterStatus(activePrinter) : 
-        { available: false, message: 'No active printer' };
+        await this.receiptLineService.checkPrinterStatus(activePrinter) : 
+        { available: false, message: 'No hay impresora activa' };
       
-      // Transform printer info for output
+      // Transformar info de impresora para la salida
       const printerList = printers.map(printer => ({
         name: printer.name,
         isDefault: printer.isDefault,
         isThermal: printer.isThermal,
         portName: printer.portName,
         status: printer.name === activePrinter ? 
-          (printerStatus.available ? 'Active' : 'Error') : 'Available'
+          (printerStatus.available ? 'Activa' : 'Error') : 'Disponible'
       }));
       
-      // Determine overall status
+      // Determinar estado general
       let status: 'success' | 'warning' | 'error' = 'success';
-      let message = 'Printing system is working correctly';
+      let message = 'El sistema de impresión funciona correctamente';
       const details: string[] = [];
       
-      // Check if there are any thermal printers
+      // Comprobar si hay impresoras térmicas
       const thermalPrinters = printers.filter(p => p.isThermal);
       if (thermalPrinters.length === 0) {
         status = 'warning';
-        message = 'No thermal printers detected';
-        details.push('System will use standard printers for receipt printing');
+        message = 'No se detectaron impresoras térmicas';
+        details.push('El sistema usará impresoras estándar para imprimir recibos');
       } else {
-        details.push(`Found ${thermalPrinters.length} thermal printer(s)`);
+        details.push(`Se encontraron ${thermalPrinters.length} impresora(s) térmica(s)`);
         thermalPrinters.forEach(p => {
-          details.push(`Thermal printer: ${p.name}${p.portName ? ` (Port: ${p.portName})` : ''}`);
+          details.push(`Impresora térmica: ${p.name}${p.portName ? ` (Puerto: ${p.portName})` : ''}`);
         });
       }
       
-      // Check if there are any USB printers
+      // Comprobar si hay impresoras USB
       if (usbPrinters.length > 0) {
-        details.push(`Found ${usbPrinters.length} USB printer(s)`);
+        details.push(`Se encontraron ${usbPrinters.length} impresora(s) USB`);
         status = 'success';
-        message = 'USB printer detected';
+        message = 'Impresora USB detectada';
       }
       
-      // Check if active printer is available
+      // Comprobar si la impresora activa está disponible
       if (activePrinter && !printerStatus.available) {
         status = 'warning';
-        message = printerStatus.message || 'Printer not available';
-        details.push('No working printer configured for receipts');
+        message = printerStatus.message || 'Impresora no disponible';
+        details.push('No hay impresora funcional configurada para recibos');
       } else if (activePrinter) {
-        details.push(`Active printer: ${activePrinter}`);
+        details.push(`Impresora activa: ${activePrinter}`);
+      }
+
+      // Verificar si ReceiptLine está disponible
+      try {
+        const hasReceiptLine = typeof window.printerApi?.print === 'function';
+        details.push(`ReceiptLine: ${hasReceiptLine ? 'Disponible' : 'No disponible'}`);
+        
+        if (!hasReceiptLine) {
+          status = status === 'success' ? 'warning' : status;
+          details.push('Se recomienda instalar ReceiptLine para mejor compatibilidad');
+        }
+      } catch (err) {
+        details.push('No se pudo verificar ReceiptLine');
       }
       
       return {
@@ -115,83 +144,110 @@ export class PrinterDiagnostic {
         systemInfo
       };
     } catch (error) {
-      console.error('Error running printer diagnostic:', error);
+      console.error('Error al ejecutar diagnóstico de impresora:', error);
       return {
         status: 'error',
-        message: 'Failed to run printer diagnostic',
-        details: [error instanceof Error ? error.message : 'Unknown error']
+        message: 'Error al ejecutar diagnóstico de impresora',
+        details: [error instanceof Error ? error.message : 'Error desconocido']
       };
     }
   }
   
   /**
-   * Test a specific printer
-   * @param printerName Name of printer to test
+   * Probar una impresora específica
+   * @param printerName Nombre de la impresora a probar
+   * @param mode Modo de prueba: 'receipt' para recibos, 'label' para etiquetas
    */
-  public async testPrinter(printerName?: string): Promise<DiagnosticResult> {
+  public async testPrinter(
+    printerName?: string, 
+    mode: 'receipt' | 'label' = 'receipt'
+  ): Promise<DiagnosticResult> {
     try {
-      const targetPrinter = printerName || this.thermalPrintService.activePrinter;
+      const targetPrinter = printerName || (
+        mode === 'receipt' 
+          ? this.receiptLineService.activePrinter 
+          : this.receiptLineService.activeLabelPrinter
+      );
       
       if (!targetPrinter) {
         return {
           status: 'error',
-          message: 'No printer specified or configured'
+          message: 'No se especificó impresora o no hay configurada'
         };
       }
       
-      // Try to print a test page
+      // Intentar imprimir una página de prueba usando ReceiptLine primero
+      try {
+        // Usar el servicio ReceiptLine para la prueba
+        const result = await this.receiptLineService.testPrinter(targetPrinter, mode);
+        
+        if (result.success) {
+          return {
+            status: 'success',
+            message: `Página de prueba enviada a ${targetPrinter}`,
+            details: [result.message || 'Verifique la impresora para ver el resultado']
+          };
+        }
+        
+        // Si falló ReceiptLine, intentar con ThermalPrintService
+        console.warn('La prueba con ReceiptLine falló, intentando con método alternativo:', result.error);
+      } catch (err) {
+        console.warn('Error al probar con ReceiptLine:', err);
+      }
+      
+      // Fallback a ThermalPrintService para impresora térmica
       const result = await this.thermalPrintService.testPrinter(targetPrinter);
       
       if (result.success) {
         return {
           status: 'success',
-          message: `Test page sent to ${targetPrinter}`,
-          details: [result.message || 'Check printer for output']
+          message: `Prueba enviada a ${targetPrinter}`,
+          details: [result.message || 'Verifique la impresora para ver el resultado']
         };
       } else {
         return {
           status: 'error',
-          message: `Failed to print to ${targetPrinter}`,
-          details: [result.error || 'Unknown error']
+          message: `Error al imprimir en ${targetPrinter}`,
+          details: [result.error || 'Error desconocido']
         };
       }
     } catch (error) {
-      console.error('Error testing printer:', error);
+      console.error('Error al probar impresora:', error);
       return {
         status: 'error',
-        message: 'Test failed with exception',
-        details: [error instanceof Error ? error.message : 'Unknown error']
+        message: 'La prueba falló con excepción',
+        details: [error instanceof Error ? error.message : 'Error desconocido']
       };
     }
   }
   
   /**
-   * Get system environment information
-   * Collects information about OS, Electron, and app versions
+   * Obtener información del entorno del sistema
+   * Recopila información sobre SO, Electron y versiones de la aplicación
    */
   public async getSystemInfo(): Promise<Record<string, any>> {
     const info: Record<string, any> = {
       timestamp: new Date().toISOString(),
-      platform: 'Unknown',
-      electronVersion: 'Unknown',
-      nodeVersion: 'Unknown',
-      appVersion: 'Unknown'
+      platform: 'Desconocido',
+      electronVersion: 'Desconocido',
+      nodeVersion: 'Desconocido',
+      appVersion: 'Desconocido'
     };
     
     try {
-      // Try to get versions from window.versions (from preload)
+      // Intentar obtener versiones de window.versions (desde preload)
       if (window.versions) {
         info.electronVersion = window.versions.electron();
         info.nodeVersion = window.versions.node();
         info.chromeVersion = window.versions.chrome();
       }
       
-      // Try to detect platform from navigator
+      // Intentar detectar plataforma desde navigator
       if (navigator.platform) {
         info.platform = navigator.platform;
       }
       
-      // Get basic app information only - printer info collected elsewhere
+      // Obtener información básica de la aplicación - info de impresora se recopila en otro lugar
       if (window.api?.getAppPaths) {
         const paths = await window.api.getAppPaths();
         if (paths) {
@@ -204,48 +260,66 @@ export class PrinterDiagnostic {
       
       return info;
     } catch (error) {
-      console.error('Error getting system info:', error);
+      console.error('Error al obtener info del sistema:', error);
       return {
         ...info,
-        error: error instanceof Error ? error.message : 'Unknown error'
+        error: error instanceof Error ? error.message : 'Error desconocido'
       };
     }
   }
   
   /**
-   * Test opening cash drawer
-   * @param printerName Optional printer name
+   * Probar apertura de cajón de dinero
+   * @param printerName Nombre de impresora opcional
    */
   public async testCashDrawer(printerName?: string): Promise<DiagnosticResult> {
     try {
+      // Intentar con ReceiptLine primero
+      try {
+        const result = await this.receiptLineService.openCashDrawer(printerName);
+        
+        if (result.success) {
+          return {
+            status: 'success',
+            message: 'Comando de cajón enviado correctamente',
+            details: ['Verifique si el cajón se abrió']
+          };
+        }
+        
+        console.warn('Apertura de cajón con ReceiptLine falló, intentando método alternativo:', result.error);
+      } catch (err) {
+        console.warn('Error con apertura ReceiptLine:', err);
+      }
+      
+      // Fallback a ThermalPrintService
       const result = await this.thermalPrintService.openCashDrawer(printerName);
       
       if (result.success) {
         return {
           status: 'success',
-          message: 'Cash drawer command sent successfully',
-          details: ['Check if the cash drawer opened']
+          message: 'Comando de cajón enviado correctamente',
+          details: ['Verifique si el cajón se abrió']
         };
       } else {
         return {
           status: 'error',
-          message: 'Failed to send cash drawer command',
-          details: [result.error || 'Printer may not support cash drawer control']
+          message: 'Error al enviar comando de cajón',
+          details: [result.error || 'La impresora podría no soportar control de cajón']
         };
       }
     } catch (error) {
-      console.error('Error testing cash drawer:', error);
+      console.error('Error al probar cajón:', error);
       return {
         status: 'error',
-        message: 'Cash drawer test failed with exception',
-        details: [error instanceof Error ? error.message : 'Unknown error']
+        message: 'Prueba de cajón falló con excepción',
+        details: [error instanceof Error ? error.message : 'Error desconocido']
       };
     }
   }
   
   /**
-   * Create a detailed diagnostic report in HTML format
-   * Useful for support and troubleshooting
+   * Crear un informe de diagnóstico detallado en formato HTML
+   * Útil para soporte y solución de problemas
    */
   public async generateDiagnosticReport(): Promise<string> {
     try {
@@ -257,7 +331,7 @@ export class PrinterDiagnostic {
         <html>
         <head>
           <meta charset="UTF-8">
-          <title>WilPOS Printer Diagnostic Report</title>
+          <title>WilPOS - Informe de Diagnóstico de Impresoras</title>
           <style>
             body {
               font-family: Arial, sans-serif;
@@ -310,11 +384,11 @@ export class PrinterDiagnostic {
           </style>
         </head>
         <body>
-          <h1>WilPOS Printer Diagnostic Report</h1>
-          <p>Generated: ${timestamp}</p>
+          <h1>WilPOS - Informe de Diagnóstico de Impresoras</h1>
+          <p>Generado: ${timestamp}</p>
           
           <div class="status ${diagnosticResult.status}">
-            <h2>Diagnostic Result: ${diagnosticResult.status.toUpperCase()}</h2>
+            <h2>Resultado del Diagnóstico: ${diagnosticResult.status.toUpperCase()}</h2>
             <p><strong>${diagnosticResult.message}</strong></p>
             ${diagnosticResult.details ? `
               <ul>
@@ -323,35 +397,35 @@ export class PrinterDiagnostic {
             ` : ''}
           </div>
           
-          <h2>Printer Information</h2>
+          <h2>Información de Impresoras</h2>
           ${diagnosticResult.printers && diagnosticResult.printers.length > 0 ? `
             <table>
               <tr>
-                <th>Name</th>
-                <th>Type</th>
-                <th>Port</th>
-                <th>Status</th>
-                <th>Default</th>
+                <th>Nombre</th>
+                <th>Tipo</th>
+                <th>Puerto</th>
+                <th>Estado</th>
+                <th>Predeterminada</th>
               </tr>
               ${diagnosticResult.printers.map(printer => `
                 <tr>
                   <td>${printer.name}</td>
-                  <td>${printer.isThermal ? 'Thermal' : 'Standard'}</td>
+                  <td>${printer.isThermal ? 'Térmica' : 'Estándar'}</td>
                   <td>${printer.portName || 'N/A'}</td>
                   <td>${printer.status}</td>
-                  <td>${printer.isDefault ? 'Yes' : 'No'}</td>
+                  <td>${printer.isDefault ? 'Sí' : 'No'}</td>
                 </tr>
               `).join('')}
             </table>
-            <p>Active printer: ${diagnosticResult.activePrinter || 'None'}</p>
-          ` : '<p>No printers detected</p>'}
+            <p>Impresora activa: ${diagnosticResult.activePrinter || 'Ninguna'}</p>
+          ` : '<p>No se detectaron impresoras</p>'}
           
-          <h2>System Information</h2>
+          <h2>Información del Sistema</h2>
           ${diagnosticResult.systemInfo ? `
             <table>
               <tr>
-                <th>Property</th>
-                <th>Value</th>
+                <th>Propiedad</th>
+                <th>Valor</th>
               </tr>
               ${Object.entries(diagnosticResult.systemInfo).map(([key, value]) => `
                 <tr>
@@ -360,26 +434,26 @@ export class PrinterDiagnostic {
                 </tr>
               `).join('')}
             </table>
-          ` : '<p>System information not available</p>'}
+          ` : '<p>Información del sistema no disponible</p>'}
           
           <div class="footer">
-            <p>WilPOS - Point of Sale System</p>
-            <p>For support, please contact system administrator</p>
+            <p>WilPOS - Sistema de Punto de Venta</p>
+            <p>Para soporte, contacte al administrador del sistema</p>
           </div>
         </body>
         </html>
       `;
     } catch (error) {
-      console.error('Error generating diagnostic report:', error);
+      console.error('Error al generar informe de diagnóstico:', error);
       return `
         <!DOCTYPE html>
         <html>
         <head>
-          <title>Error Report</title>
+          <title>Informe de Error</title>
         </head>
         <body>
-          <h1>Error Generating Diagnostic Report</h1>
-          <p>${error instanceof Error ? error.message : 'Unknown error'}</p>
+          <h1>Error al Generar Informe de Diagnóstico</h1>
+          <p>${error instanceof Error ? error.message : 'Error desconocido'}</p>
         </body>
         </html>
       `;

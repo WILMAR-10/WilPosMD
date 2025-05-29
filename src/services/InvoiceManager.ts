@@ -1,22 +1,25 @@
 // src/services/InvoiceManager.ts
 import { PreviewSale } from '../types/sales';
 import ThermalPrintService from './ThermalPrintService';
+import ReceiptLineService from './ReceiptLineService';
 import { PrintInvoiceOptions, SavePdfOptions } from '../types/printer';
 
 /**
- * Manages invoice generation, printing, and PDF creation
- * Handles both thermal and standard printing methods
+ * Gestiona la generación de facturas, impresión y creación de PDF
+ * Maneja tanto impresión térmica como estándar
  */
 export default class InvoiceManager {
   private static instance: InvoiceManager;
   private thermalPrintService: ThermalPrintService;
+  private receiptLineService: ReceiptLineService;
   
-  // Private constructor (singleton pattern)
+  // Constructor privado (patrón singleton)
   private constructor() {
     this.thermalPrintService = ThermalPrintService.getInstance();
+    this.receiptLineService = ReceiptLineService.getInstance();
   }
   
-  // Get singleton instance
+  // Obtener instancia singleton
   public static getInstance(): InvoiceManager {
     if (!InvoiceManager.instance) {
       InvoiceManager.instance = new InvoiceManager();
@@ -25,29 +28,47 @@ export default class InvoiceManager {
   }
   
   /**
-   * Print invoice with enhanced error handling and fallback options
-   * @param sale The sale data to print
-   * @param htmlContent HTML representation of the invoice
-   * @param options Printing options
-   * @returns Success status
+   * Imprimir factura con mejor manejo de errores y opciones de fallback
+   * @param sale Datos de la venta a imprimir
+   * @param htmlContent Representación HTML de la factura
+   * @param options Opciones de impresión
+   * @returns Estado de éxito
    */
   public async printInvoice(sale: PreviewSale, htmlContent: string, options?: PrintInvoiceOptions): Promise<boolean> {
     try {
-      // Get settings or use defaults
+      // Obtener configuración o usar valores predeterminados
       const settings = await this.getSettings();
       
-      // Determine if we should use a thermal printer
+      // Intentar primero con el nuevo servicio ReceiptLine (primera opción)
+      try {
+        const result = await this.receiptLineService.printReceipt(
+          sale,
+          settings,
+          options?.printerName || settings?.impresora_termica
+        );
+        
+        if (result.success) {
+          console.log('Factura impresa correctamente con ReceiptLine');
+          return true;
+        }
+        
+        console.warn('Impresión con ReceiptLine falló, usando método alternativo:', result.error);
+      } catch (error) {
+        console.warn('Error con ReceiptLine, usando método alternativo:', error);
+      }
+      
+      // Determinar si debemos usar impresora térmica
       const useThermal = !!settings?.impresora_termica;
       
-      // For thermal printing (ESC/POS)
+      // Para impresión térmica (ESC/POS)
       if (useThermal && settings?.impresora_termica) {
         const printerStatus = await this.thermalPrintService.checkPrinterStatus(settings.impresora_termica);
         
         if (printerStatus.available) {
-          // Prepare receipt data from sale
+          // Preparar datos del recibo a partir de la venta
           const receiptData = this.thermalPrintService.prepareReceiptData(sale, settings);
           
-          // Print using thermal service
+          // Imprimir usando servicio térmico
           const result = await this.thermalPrintService.printReceipt(
             receiptData,
             settings.impresora_termica
@@ -57,24 +78,24 @@ export default class InvoiceManager {
             return true;
           }
           
-          // Log failure but continue to fallback
-          console.warn('Thermal printing failed, falling back to standard printing:', result.error);
+          // Registrar fallo pero continuar al fallback
+          console.warn('Impresión térmica falló, probando impresión estándar:', result.error);
         }
       }
       
-      // For regular HTML printing as fallback
+      // Para impresión HTML regular como fallback
       return await this.printHtml(htmlContent, options, settings);
     } catch (error) {
-      console.error('Print invoice error:', error);
+      console.error('Error de impresión de factura:', error);
       
-      // Try fallback printing as last resort
+      // Intentar impresión de fallback como último recurso
       try {
         if (typeof window.print === 'function') {
           window.print();
           return true;
         }
       } catch (fallbackError) {
-        console.error('Fallback printing failed:', fallbackError);
+        console.error('Impresión de fallback falló:', fallbackError);
       }
       
       throw error;
@@ -82,17 +103,17 @@ export default class InvoiceManager {
   }
   
   /**
-   * Enhanced HTML printing with better error handling
-   * @param htmlContent HTML to print
-   * @param options Print options
-   * @param settings App settings
-   * @returns Success status
+   * Impresión HTML mejorada con mejor manejo de errores
+   * @param htmlContent HTML a imprimir
+   * @param options Opciones de impresión
+   * @param settings Configuración de la app
+   * @returns Estado de éxito
    */
   private async printHtml(htmlContent: string, options?: PrintInvoiceOptions, settings?: any): Promise<boolean> {
     try {
-      // Use window.printerApi.print if available
+      // Usar window.printerApi.print si está disponible
       if (window.printerApi?.print) {
-        // Prepare print options with defaults
+        // Preparar opciones de impresión con valores predeterminados
         const printOptions = {
           html: htmlContent,
           printerName: options?.printerName || settings?.impresora_termica,
@@ -110,25 +131,25 @@ export default class InvoiceManager {
         
         const result = await window.printerApi.print(printOptions);
         if (!result.success) {
-          throw new Error(result.error || 'Unknown printing error');
+          throw new Error(result.error || 'Error de impresión desconocido');
         }
         return true;
       }
       
-      // If API print not available, try window.print()
+      // Si API print no está disponible, intentar window.print()
       if (typeof window.print === 'function') {
-        // Create a hidden iframe for printing
+        // Crear iframe oculto para impresión
         const iframe = document.createElement('iframe');
         iframe.style.display = 'none';
         document.body.appendChild(iframe);
         
-        // Set content and print
+        // Establecer contenido e imprimir
         if (iframe.contentDocument) {
           iframe.contentDocument.open();
           iframe.contentDocument.write(htmlContent);
           iframe.contentDocument.close();
           
-          // Wait for content to load before printing
+          // Esperar a que el contenido se cargue antes de imprimir
           await new Promise(resolve => setTimeout(resolve, 500));
           
           if (iframe.contentWindow) {
@@ -136,7 +157,7 @@ export default class InvoiceManager {
           }
         }
         
-        // Cleanup after printing
+        // Limpiar después de imprimir
         setTimeout(() => {
           document.body.removeChild(iframe);
         }, 1000);
@@ -144,19 +165,19 @@ export default class InvoiceManager {
         return true;
       }
       
-      throw new Error('No printing method available');
+      throw new Error('No hay método de impresión disponible');
     } catch (error) {
-      console.error('HTML print error:', error);
+      console.error('Error de impresión HTML:', error);
       throw error;
     }
   }
   
   /**
-   * Save invoice as PDF with enhanced error handling
-   * @param sale Sale data for the invoice
-   * @param htmlContent HTML representation of the invoice
-   * @param options Save options
-   * @returns Path to the saved PDF
+   * Guardar factura como PDF con mejor manejo de errores
+   * @param sale Datos de venta para la factura
+   * @param htmlContent Representación HTML de la factura
+   * @param options Opciones de guardado
+   * @returns Ruta al PDF guardado
    */
   public async saveAsPdf(sale: PreviewSale, htmlContent: string, options?: {
     directory?: string;
@@ -164,21 +185,21 @@ export default class InvoiceManager {
     overwrite?: boolean;
   }): Promise<string | undefined> {
     try {
-      // Check if PDF API is available
+      // Comprobar si la API PDF está disponible
       const hasPdfApi = !!(window.printerApi?.savePdf || window.api?.savePdf);
       
       if (!hasPdfApi) {
-        throw new Error('PDF API not available');
+        throw new Error('API PDF no disponible');
       }
       
-      // Get default directory if not specified
+      // Obtener directorio predeterminado si no se especifica
       let directory = options?.directory;
       if (!directory) {
         const settings = await this.getSettings();
         directory = settings?.ruta_pdf;
         
         if (!directory) {
-          // Try different methods to get a default path
+          // Probar diferentes métodos para obtener una ruta predeterminada
           if (window.printerApi?.getPdfPath) {
             const pdfPath = await window.printerApi.getPdfPath();
             directory = pdfPath || undefined;
@@ -189,24 +210,24 @@ export default class InvoiceManager {
         }
         
         if (!directory) {
-          throw new Error('No directory specified and could not get default path');
+          throw new Error('No se especificó directorio y no se pudo obtener ruta predeterminada');
         }
         
-        // Ensure directory exists
+        // Asegurar que el directorio existe
         if (window.api?.ensureDir) {
           await window.api.ensureDir(directory);
         }
       }
       
-      // Generate unique filename if not provided
+      // Generar nombre de archivo único si no se proporciona
       const timestamp = new Date().toISOString().split('T')[0];
       const filename = options?.filename || 
         `factura-${sale.id || 'nueva'}-${timestamp}.pdf`;
       
-      // Create full path
+      // Crear ruta completa
       const fullPath = `${directory}/${filename}`;
       
-      // Prepare save options
+      // Preparar opciones de guardado
       const saveOptions = {
         path: fullPath,
         html: htmlContent,
@@ -221,37 +242,37 @@ export default class InvoiceManager {
         }
       };
       
-      // Save to PDF using available API
+      // Guardar en PDF usando la API disponible
       const savePdfFn = window.printerApi?.savePdf || window.api?.savePdf;
       if (savePdfFn) {
         const result = await savePdfFn(saveOptions);
         
         if (!result.success) {
-          throw new Error(result.error || 'Unknown PDF error');
+          throw new Error(result.error || 'Error de PDF desconocido');
         }
         
         return result.path || fullPath;
       }
       
-      throw new Error('PDF saving function not available');
+      throw new Error('Función de guardado PDF no disponible');
     } catch (error) {
-      console.error('Save PDF error:', error);
+      console.error('Error al guardar PDF:', error);
       throw error;
     }
   }
   
   /**
-   * Enhanced settings retrieval with caching
+   * Obtención de configuración mejorada con caché
    */
   private settingsCache: any = null;
   private settingsCacheTime: number = 0;
-  private settingsCacheExpiration: number = 30000; // 30 seconds
+  private settingsCacheExpiration: number = 30000; // 30 segundos
   
   private async getSettings(): Promise<any> {
     try {
       const now = Date.now();
       
-      // Return cached settings if valid
+      // Devolver configuración en caché si es válida
       if (this.settingsCache && (now - this.settingsCacheTime) < this.settingsCacheExpiration) {
         return this.settingsCache;
       }
@@ -259,7 +280,7 @@ export default class InvoiceManager {
       if (window.api?.getSettings) {
         const settings = await window.api.getSettings();
         
-        // Update cache
+        // Actualizar caché
         this.settingsCache = settings;
         this.settingsCacheTime = now;
         
@@ -268,9 +289,9 @@ export default class InvoiceManager {
       
       return null;
     } catch (error) {
-      console.error('Error loading settings:', error);
+      console.error('Error al cargar configuración:', error);
       
-      // Return cache even if expired on error
+      // Devolver caché incluso si ha expirado en caso de error
       if (this.settingsCache) {
         return this.settingsCache;
       }
