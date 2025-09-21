@@ -2,6 +2,8 @@
 import { app, ipcMain } from 'electron';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import fs from 'fs';
+import { SecurityService } from '../services/SecurityService.js';
 
 // Database imports
 import { initDB, prepareTable, migrateDatabase, closeDB, getDB } from './db.js';
@@ -11,11 +13,50 @@ import {
     MovimientoDAO
 } from './dao.js';
 
+// Import new discount and offers DAOs
+import DescuentoDAO from './DescuentoDAO.js';
+import OfertaDAO from './OfertaDAO.js';
+import DescuentoAplicadoDAO from './DescuentoAplicadoDAO.js';
+
+// Import financial reporting DAO
+import FinancialReportDAO from './FinancialReportDAO.js';
+import AccountingDAO from './AccountingDAO.js';
+import ComprasDAO from './ComprasDAO.js';
+
 export {
     closeDB,
     initializeDatabase,
-    setupIpcHandlers
+    setupIpcHandlers,
+    getSalesReportData,
+    getTopProductsData,
+    broadcastSyncEvent
 };
+
+// Helper para enviar eventos de sincronización
+function broadcastSyncEvent(type, action, data) {
+    // BrowserWindow se importa dinámicamente para evitar problemas de módulos ES
+    
+    const syncEvent = {
+        type,        // 'product', 'sale', 'inventory', etc.
+        action,      // 'created', 'updated', 'deleted'
+        data,        // Datos relevantes (ID, objeto actualizado, etc.)
+        timestamp: new Date().toISOString()
+    };
+    
+    // Enviar a todas las ventanas usando import dinámico
+    try {
+        import('electron').then(({ BrowserWindow }) => {
+            const allWindows = BrowserWindow.getAllWindows();
+            allWindows.forEach(window => {
+                window.webContents.send('sync-event', syncEvent);
+            });
+        });
+    } catch (error) {
+        console.error('Error sending sync event:', error);
+    }
+    
+    console.log(`🔄 Sync event broadcasted: ${type}:${action}`, data);
+}
 
 // Set up directory paths
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -59,7 +100,20 @@ async function initializeDatabase() {
             'movimientos_inventario',
             'configuracion',
             'caja_sesiones',
-            'caja_transacciones'
+            'caja_transacciones',
+            // Nuevas tablas para reportes financieros completos
+            'activos',
+            'pasivos',
+            'patrimonio',
+            'gastos_operativos',
+            'flujo_efectivo',
+            // Nuevas tablas para sistema de descuentos y ofertas
+            'descuentos',
+            'ofertas_productos',
+            'descuentos_aplicados',
+            // Nuevas tablas para compras a proveedores
+            'compras',
+            'compra_detalles'
         ];
 
         for (const table of tables) {
@@ -74,11 +128,14 @@ async function initializeDatabase() {
         if (userCount === 0) {
             console.log("🔐 Creating default admin user...");
 
+            // Hash the default admin password
+            const hashedPassword = await SecurityService.hashPassword('admin');
+
             // Create default admin user with expanded permissions
             await UsuarioDAO.create({
                 nombre: 'Administrador',
                 usuario: 'admin',
-                clave: 'admin',
+                clave: hashedPassword,
                 rol: 'admin',
                 permisos: {
                     usuarios: { lectura: true, escritura: true },
@@ -105,6 +162,86 @@ async function initializeDatabase() {
 }
 
 // =====================================================
+// Helper Functions for Reports
+// =====================================================
+
+// Get sales report data for a date range
+async function getSalesReportData(startDate, endDate) {
+    try {
+        // Get database instance using the existing getDB function
+        const db = getDB();
+        
+        // Convert dates to ensure proper format if needed
+        const formattedStartDate = startDate.includes('T') ? startDate.split('T')[0] : startDate;
+        const formattedEndDate = endDate.includes('T') ? endDate.split('T')[0] : endDate;
+        
+        // Query for aggregated daily sales data
+        const query = `
+            SELECT 
+                date(fecha_venta) as fecha,
+                COUNT(*) as num_ventas,
+                SUM(total) as total_ventas,
+                ROUND(AVG(total), 2) as promedio_venta,
+                SUM(descuento) as total_descuentos,
+                SUM(impuestos) as total_impuestos
+            FROM ventas 
+            WHERE fecha_venta BETWEEN ? AND ?
+                AND estado != 'Anulada'
+            GROUP BY date(fecha_venta)
+            ORDER BY fecha_venta ASC
+        `;
+        
+        const results = db.prepare(query).all(formattedStartDate, formattedEndDate);
+        console.log(`Retrieved ${results.length} days of sales data between ${formattedStartDate} and ${formattedEndDate}`);
+        
+        // Ensure results are properly formatted
+        return results.map(row => ({
+            fecha: row.fecha,
+            num_ventas: row.num_ventas,
+            total_ventas: row.total_ventas || 0,
+            promedio_venta: row.promedio_venta || 0,
+            total_descuentos: row.total_descuentos || 0,
+            total_impuestos: row.total_impuestos || 0
+        }));
+    } catch (error) {
+        console.error('Error getting sales report data:', error);
+        throw new Error(`Failed to retrieve sales report: ${error.message}`);
+    }
+}
+
+// Get top selling products for a date range
+async function getTopProductsData(startDate, endDate, limit = 10) {
+    try {
+        const db = getDB();
+        
+        const query = `
+            SELECT 
+                p.id,
+                p.nombre,
+                p.codigo_barra,
+                SUM(vd.cantidad) as cantidad_vendida,
+                SUM(vd.subtotal) as total_vendido
+            FROM venta_detalles vd
+            JOIN productos p ON vd.producto_id = p.id
+            JOIN ventas v ON vd.venta_id = v.id
+            WHERE v.fecha_venta BETWEEN ? AND ?
+                AND v.estado != 'Anulada'
+            GROUP BY p.id
+            ORDER BY total_vendido DESC
+            LIMIT ?
+        `;
+        
+        const results = db.prepare(query).all(startDate, endDate, limit);
+        console.log(`Retrieved ${results.length} top products between ${startDate} and ${endDate}`);
+        
+        return results;
+    } catch (error) {
+        console.error('Error getting top products data:', error);
+        throw new Error(`Failed to retrieve top products: ${error.message}`);
+    }
+}
+
+// =====================================================
 // IPC Handlers for Database Operations Only
 // =====================================================
 
@@ -124,34 +261,64 @@ function setupIpcHandlers() {
     // Database initialization
     ipcMain.handle('initialize-database', createHandler('initialize-database', initializeDatabase));
 
-    // Authentication handlers
+    // Authentication handlers with secure password verification
     ipcMain.handle('login', createHandler('login', async (credentials) => {
-        const user = await UsuarioDAO.getByUsername(credentials.username);
-
-        if (!user) {
-            return { success: false, message: "Usuario no encontrado" };
+        if (!credentials?.username || !credentials?.password) {
+            return { success: false, message: "Usuario y contraseña son requeridos" };
         }
 
-        // In production, you should use proper password hashing
-        // This is a simple example for development purposes
-        const isValidPassword = (credentials.username === 'admin' && credentials.password === 'admin') ||
-            credentials.password === user.clave;
+        // Sanitize username input
+        const sanitizedUsername = SecurityService.sanitizeInput(credentials.username);
+        
+        // Validate username format
+        if (!SecurityService.validateUsername(sanitizedUsername)) {
+            return { success: false, message: "Formato de usuario inválido" };
+        }
 
-        if (isValidPassword) {
-            return {
-                success: true,
-                user: {
-                    id: user.id,
-                    nombre: user.nombre,
-                    usuario: user.usuario,
-                    rol: user.rol,
-                    permisos: typeof user.permisos === 'string' ? JSON.parse(user.permisos) : user.permisos,
-                    activo: user.activo,
-                    fecha_creacion: user.fecha_creacion
-                }
-            };
-        } else {
-            return { success: false, message: "Contraseña incorrecta" };
+        try {
+            const user = await UsuarioDAO.getByUsername(sanitizedUsername);
+
+            if (!user) {
+                // Add small delay to prevent timing attacks
+                await new Promise(resolve => setTimeout(resolve, 100));
+                return { success: false, message: "Credenciales inválidas" };
+            }
+
+            if (!user.activo) {
+                return { success: false, message: "Usuario desactivado" };
+            }
+
+            // Verify password using secure hashing
+            const isValidPassword = await SecurityService.verifyPassword(credentials.password, user.clave);
+
+            if (isValidPassword) {
+                // Generate session token
+                const sessionToken = SecurityService.generateSecureToken();
+                
+                // Update last login time (if you have this field)
+                // await UsuarioDAO.updateLastLogin(user.id);
+
+                return {
+                    success: true,
+                    user: {
+                        id: user.id,
+                        nombre: user.nombre,
+                        usuario: user.usuario,
+                        rol: user.rol,
+                        permisos: typeof user.permisos === 'string' ? JSON.parse(user.permisos) : user.permisos,
+                        activo: user.activo,
+                        fecha_creacion: user.fecha_creacion
+                    },
+                    sessionToken
+                };
+            } else {
+                // Add small delay to prevent timing attacks
+                await new Promise(resolve => setTimeout(resolve, 100));
+                return { success: false, message: "Credenciales inválidas" };
+            }
+        } catch (error) {
+            console.error('Login error:', error);
+            return { success: false, message: "Error interno del servidor" };
         }
     }));
 
@@ -170,11 +337,38 @@ function setupIpcHandlers() {
       }
     });
     
-    // Handler for create users
+    // Handler for create users with secure password hashing
     ipcMain.handle('usuarios:insertar', async (event, userData) => {
       try {
+        // Input validation
+        if (!userData.usuario || !userData.clave) {
+          return { success: false, error: 'Usuario y contraseña son requeridos' };
+        }
+
+        // Sanitize inputs
+        const sanitizedUserData = {
+          ...userData,
+          usuario: SecurityService.sanitizeInput(userData.usuario),
+          nombre: SecurityService.sanitizeInput(userData.nombre || ''),
+          email: userData.email ? SecurityService.sanitizeInput(userData.email) : null
+        };
+
+        // Validate username format
+        if (!SecurityService.validateUsername(sanitizedUserData.usuario)) {
+          return { success: false, error: 'Formato de usuario inválido (3-20 caracteres, solo letras, números y guión bajo)' };
+        }
+
+        // Validate email if provided
+        if (sanitizedUserData.email && !SecurityService.validateEmail(sanitizedUserData.email)) {
+          return { success: false, error: 'Formato de email inválido' };
+        }
+
+        // Hash the password
+        const hashedPassword = await SecurityService.hashPassword(userData.clave);
+        sanitizedUserData.clave = hashedPassword;
+
         // Call your database function to add a user
-        const result = await UsuarioDAO.create(userData);
+        const result = await UsuarioDAO.create(sanitizedUserData);
         return { success: true, id: result.id };
       } catch (error) {
         console.error('Error creating user:', error);
@@ -182,9 +376,14 @@ function setupIpcHandlers() {
       }
     });
     
-    // User update handler
+    // User update handler with secure password handling
     ipcMain.handle('usuarios:actualizar', async (event, id, userData) => {
       try {
+        // Validate user ID
+        if (!id || isNaN(parseInt(id))) {
+          return { success: false, error: 'ID de usuario inválido' };
+        }
+
         // Make sure to import UsuarioDAO or access it properly
         if (!UsuarioDAO || typeof UsuarioDAO.update !== 'function') {
           console.error('UsuarioDAO not available or missing update method');
@@ -193,9 +392,37 @@ function setupIpcHandlers() {
             error: 'Internal server error: User update function not available' 
           };
         }
+
+        // Sanitize inputs
+        const sanitizedUserData = {
+          ...userData
+        };
+
+        if (userData.usuario) {
+          sanitizedUserData.usuario = SecurityService.sanitizeInput(userData.usuario);
+          if (!SecurityService.validateUsername(sanitizedUserData.usuario)) {
+            return { success: false, error: 'Formato de usuario inválido' };
+          }
+        }
+
+        if (userData.nombre) {
+          sanitizedUserData.nombre = SecurityService.sanitizeInput(userData.nombre);
+        }
+
+        if (userData.email) {
+          sanitizedUserData.email = SecurityService.sanitizeInput(userData.email);
+          if (!SecurityService.validateEmail(sanitizedUserData.email)) {
+            return { success: false, error: 'Formato de email inválido' };
+          }
+        }
+
+        // Hash password if it's being updated
+        if (userData.clave) {
+          sanitizedUserData.clave = await SecurityService.hashPassword(userData.clave);
+        }
         
         // Call database function to update user
-        const result = await UsuarioDAO.update(id, userData);
+        const result = await UsuarioDAO.update(parseInt(id), sanitizedUserData);
         
         if (result) {
           return { 
@@ -262,16 +489,56 @@ function setupIpcHandlers() {
     ipcMain.handle('categorias:actualizar', createHandler('categorias:actualizar', (id, data) => CategoriaDAO.update(id, data)));
     ipcMain.handle('categorias:eliminar', createHandler('categorias:eliminar', (id) => CategoriaDAO.delete(id)));
 
-    // Producto handlers
+    // Producto handlers con sincronización
     ipcMain.handle('productos:obtener', createHandler('productos:obtener', () => ProductoDAO.getAll()));
     ipcMain.handle('productos:obtenerPorId', createHandler('productos:obtenerPorId', (id) => ProductoDAO.getById(id)));
     ipcMain.handle('productos:buscar', createHandler('productos:buscar', (termino, opciones) => ProductoDAO.search(termino, opciones)));
     ipcMain.handle('productos:obtenerPorCodigoBarra', createHandler('productos:obtenerPorCodigoBarra', (codigo) => ProductoDAO.getByBarcode(codigo)));
     ipcMain.handle('productos:obtenerBajoStock', createHandler('productos:obtenerBajoStock', (limite) => ProductoDAO.getLowStock(limite)));
-    ipcMain.handle('productos:insertar', createHandler('productos:insertar', (producto) => ProductoDAO.create(producto)));
-    ipcMain.handle('productos:actualizar', createHandler('productos:actualizar', (id, data) => ProductoDAO.update(id, data)));
-    ipcMain.handle('productos:eliminar', createHandler('productos:eliminar', (id) => ProductoDAO.delete(id)));
-    ipcMain.handle('productos:actualizarStock', createHandler('productos:actualizarStock', (id, cantidad, motivo, usuarioId) => ProductoDAO.updateStock(id, cantidad, motivo, usuarioId)));
+    
+    ipcMain.handle('productos:insertar', createHandler('productos:insertar', async (producto) => {
+        const result = await ProductoDAO.create(producto);
+        if (result && result.id) {
+            // Obtener el producto completo para el evento
+            const newProduct = await ProductoDAO.getById(result.id);
+            broadcastSyncEvent('product', 'created', { id: result.id, product: newProduct });
+        }
+        return result;
+    }));
+    
+    ipcMain.handle('productos:actualizar', createHandler('productos:actualizar', async (id, data) => {
+        const result = await ProductoDAO.update(id, data);
+        if (result) {
+            // Obtener el producto actualizado
+            const updatedProduct = await ProductoDAO.getById(id);
+            broadcastSyncEvent('product', 'updated', { id, product: updatedProduct, changes: data });
+        }
+        return result;
+    }));
+    
+    ipcMain.handle('productos:eliminar', createHandler('productos:eliminar', async (id) => {
+        const result = await ProductoDAO.delete(id);
+        if (result) {
+            broadcastSyncEvent('product', 'deleted', { id });
+        }
+        return result;
+    }));
+    
+    ipcMain.handle('productos:actualizarStock', createHandler('productos:actualizarStock', async (id, cantidad, motivo, usuarioId) => {
+        const result = await ProductoDAO.updateStock(id, cantidad, motivo, usuarioId);
+        if (result) {
+            // Obtener el producto actualizado para mostrar el nuevo stock
+            const updatedProduct = await ProductoDAO.getById(id);
+            broadcastSyncEvent('inventory', 'stock_updated', { 
+                id, 
+                product: updatedProduct,
+                cantidad, 
+                motivo, 
+                usuarioId 
+            });
+        }
+        return result;
+    }));
 
     // Proveedor handlers
     ipcMain.handle('proveedores:obtener', createHandler('proveedores:obtener', () => ProveedorDAO.getAll()));
@@ -365,8 +632,8 @@ function setupIpcHandlers() {
         updates.push('ultima_modificacion = ?');
         params.push(new Date().toISOString());
 
-        params.push(id); // Add ID for WHERE clause
-
+        params.push(id); 
+        
         const query = `
             UPDATE clientes 
             SET ${updates.join(', ')}
@@ -563,7 +830,7 @@ function setupIpcHandlers() {
         };
     }));
 
-    // Manejadores de Ventas
+    // Manejadores de Ventas con sincronización
     ipcMain.handle('ventas:insertar', createHandler('ventas:insertar', async (venta, detalles) => {
         // Check if venta is provided
         if (!venta) throw new Error('Datos de venta requeridos');
@@ -646,6 +913,13 @@ function setupIpcHandlers() {
                 throw new Error(`No se pudo obtener la venta con ID ${result.id}`);
             }
 
+            // Broadcast sync event for new sale
+            broadcastSyncEvent('sale', 'created', {
+                id: result.id,
+                sale: ventaCompleta,
+                detalles: detallesVenta
+            });
+
             // Return the complete sale with details and success indicator
             return {
                 ...ventaCompleta,
@@ -675,6 +949,9 @@ function setupIpcHandlers() {
             if (!result.success) {
                 throw new Error(result.error || 'Error al anular venta');
             }
+
+            // Broadcast sync event for cancelled sale
+            broadcastSyncEvent('sale', 'cancelled', { id });
 
             return result;
         } catch (error) {
@@ -756,96 +1033,183 @@ function setupIpcHandlers() {
             }
         }));
     }
-}
 
-// Get sales report data for a date range
-export async function getSalesReportData(startDate, endDate) {
-    try {
-      // Get database instance using the existing getDB function
-      const db = getDB();
-      
-      // Convert dates to ensure proper format if needed
-      const formattedStartDate = startDate.includes('T') ? startDate.split('T')[0] : startDate;
-      const formattedEndDate = endDate.includes('T') ? endDate.split('T')[0] : endDate;
-      
-      // Query for aggregated daily sales data
-      const query = `
-        SELECT 
-          date(fecha_venta) as fecha,
-          COUNT(*) as num_ventas,
-          SUM(total) as total_ventas,
-          ROUND(AVG(total), 2) as promedio_venta,
-          SUM(descuento) as total_descuentos,
-          SUM(impuestos) as total_impuestos
-        FROM ventas 
-        WHERE fecha_venta BETWEEN ? AND ?
-          AND estado != 'Anulada'
-        GROUP BY date(fecha_venta)
-        ORDER BY fecha_venta ASC
-      `;
-      
-      const results = db.prepare(query).all(formattedStartDate, formattedEndDate);
-      console.log(`Retrieved ${results.length} days of sales data between ${formattedStartDate} and ${formattedEndDate}`);
-      
-      // Ensure results are properly formatted
-      return results.map(row => ({
-        fecha: row.fecha,
-        num_ventas: row.num_ventas,
-        total_ventas: row.total_ventas || 0,
-        promedio_venta: row.promedio_venta || 0,
-        total_descuentos: row.total_descuentos || 0,
-        total_impuestos: row.total_impuestos || 0
-      }));
-    } catch (error) {
-      console.error('Error getting sales report data:', error);
-      throw new Error(`Failed to retrieve sales report: ${error.message}`);
-    }
-}
+    // Descuentos handlers
+    ipcMain.handle('descuentos:obtener', createHandler('descuentos:obtener', () => DescuentoDAO.getAll()));
+    ipcMain.handle('descuentos:obtenerPorId', createHandler('descuentos:obtenerPorId', (id) => DescuentoDAO.getById(id)));
+    ipcMain.handle('descuentos:obtenerActivos', createHandler('descuentos:obtenerActivos', () => DescuentoDAO.getActiveDiscounts()));
+    ipcMain.handle('descuentos:insertar', createHandler('descuentos:insertar', async (descuento) => {
+        const result = await DescuentoDAO.create(descuento);
+        if (result && result.id) {
+            broadcastSyncEvent('discount', 'created', { id: result.id, discount: result });
+        }
+        return result;
+    }));
+    ipcMain.handle('descuentos:actualizar', createHandler('descuentos:actualizar', async (id, data) => {
+        const result = await DescuentoDAO.update(id, data);
+        if (result) {
+            const updatedDiscount = await DescuentoDAO.getById(id);
+            broadcastSyncEvent('discount', 'updated', { id, discount: updatedDiscount, changes: data });
+        }
+        return result;
+    }));
+    ipcMain.handle('descuentos:eliminar', createHandler('descuentos:eliminar', async (id) => {
+        const result = await DescuentoDAO.delete(id);
+        if (result) {
+            broadcastSyncEvent('discount', 'deleted', { id });
+        }
+        return result;
+    }));
+    ipcMain.handle('descuentos:toggleActivo', createHandler('descuentos:toggleActivo', async (id) => {
+        const result = await DescuentoDAO.toggleActive(id);
+        if (result) {
+            const updatedDiscount = await DescuentoDAO.getById(id);
+            broadcastSyncEvent('discount', 'status_changed', { id, discount: updatedDiscount });
+        }
+        return result;
+    }));
+    ipcMain.handle('descuentos:obtenerAplicables', createHandler('descuentos:obtenerAplicables', (productos, total, categoria) => 
+        DescuentoDAO.getApplicableDiscounts(productos, total, categoria)));
+    ipcMain.handle('descuentos:obtenerPorCupon', createHandler('descuentos:obtenerPorCupon', (codigo) => 
+        DescuentoDAO.getByCouponCode(codigo)));
 
-// Get top selling products for a date range
-export async function getTopProductsData(startDate, endDate, limit = 10) {
-    try {
-      const db = getDB();
-      
-      const query = `
-        SELECT 
-          p.id,
-          p.nombre,
-          p.codigo_barra,
-          SUM(vd.cantidad) as cantidad_vendida,
-          SUM(vd.subtotal) as total_vendido
-        FROM venta_detalles vd
-        JOIN productos p ON vd.producto_id = p.id
-        JOIN ventas v ON vd.venta_id = v.id
-        WHERE v.fecha_venta BETWEEN ? AND ?
-          AND v.estado != 'Anulada'
-        GROUP BY p.id
-        ORDER BY total_vendido DESC
-        LIMIT ?
-      `;
-      
-      const results = db.prepare(query).all(startDate, endDate, limit);
-      console.log(`Retrieved ${results.length} top products between ${startDate} and ${endDate}`);
-      
-      return results;
-    } catch (error) {
-      console.error('Error getting top products data:', error);
-      throw new Error(`Failed to retrieve top products: ${error.message}`);
-    }
-}
+    // Ofertas handlers
+    ipcMain.handle('ofertas:obtener', createHandler('ofertas:obtener', () => OfertaDAO.getAll()));
+    ipcMain.handle('ofertas:obtenerPorId', createHandler('ofertas:obtenerPorId', (id) => OfertaDAO.getById(id)));
+    ipcMain.handle('ofertas:obtenerActivas', createHandler('ofertas:obtenerActivas', () => OfertaDAO.getActiveOffers()));
+    ipcMain.handle('ofertas:insertar', createHandler('ofertas:insertar', async (oferta) => {
+        const result = await OfertaDAO.create(oferta);
+        if (result && result.id) {
+            broadcastSyncEvent('offer', 'created', { id: result.id, offer: result });
+        }
+        return result;
+    }));
+    ipcMain.handle('ofertas:actualizar', createHandler('ofertas:actualizar', async (id, data) => {
+        const result = await OfertaDAO.update(id, data);
+        if (result) {
+            const updatedOffer = await OfertaDAO.getById(id);
+            broadcastSyncEvent('offer', 'updated', { id, offer: updatedOffer, changes: data });
+        }
+        return result;
+    }));
+    ipcMain.handle('ofertas:eliminar', createHandler('ofertas:eliminar', async (id) => {
+        const result = await OfertaDAO.delete(id);
+        if (result) {
+            broadcastSyncEvent('offer', 'deleted', { id });
+        }
+        return result;
+    }));
+    ipcMain.handle('ofertas:toggleActivo', createHandler('ofertas:toggleActivo', async (id) => {
+        const result = await OfertaDAO.toggleActive(id);
+        if (result) {
+            const updatedOffer = await OfertaDAO.getById(id);
+            broadcastSyncEvent('offer', 'status_changed', { id, offer: updatedOffer });
+        }
+        return result;
+    }));
+    ipcMain.handle('ofertas:obtenerAplicables', createHandler('ofertas:obtenerAplicables', (productos) => 
+        OfertaDAO.getApplicableOffers(productos)));
+    ipcMain.handle('ofertas:calcularDescuento', createHandler('ofertas:calcularDescuento', (oferta, productos) => 
+        OfertaDAO.calculateOfferDiscount(oferta, productos)));
 
-// al final del fichero, exporta la función que monta tu esquema / abre la conexión:
-async function initializeDatabase() {
-  // aquí abres tu DB, ejecutas schema.sql, migrations, etc.
-  const db = abrirConexión(); 
-  await ejecutarEsquema(db);
-  return true;
-}
+    // Descuentos aplicados handlers
+    ipcMain.handle('descuentosAplicados:obtener', createHandler('descuentosAplicados:obtener', () => DescuentoAplicadoDAO.getAll()));
+    ipcMain.handle('descuentosAplicados:obtenerPorVenta', createHandler('descuentosAplicados:obtenerPorVenta', (ventaId) => 
+        DescuentoAplicadoDAO.getByVentaId(ventaId)));
+    ipcMain.handle('descuentosAplicados:insertar', createHandler('descuentosAplicados:insertar', (descuentoAplicado) => 
+        DescuentoAplicadoDAO.create(descuentoAplicado)));
+    ipcMain.handle('descuentosAplicados:obtenerTotalesPorPeriodo', createHandler('descuentosAplicados:obtenerTotalesPorPeriodo', 
+        (startDate, endDate) => DescuentoAplicadoDAO.getTotalDescuentosByPeriod(startDate, endDate)));
+    ipcMain.handle('descuentosAplicados:obtenerMasUsados', createHandler('descuentosAplicados:obtenerMasUsados', 
+        (startDate, endDate, limit) => DescuentoAplicadoDAO.getMostUsedDiscounts(startDate, endDate, limit)));
+    ipcMain.handle('descuentosAplicados:obtenerEfectividad', createHandler('descuentosAplicados:obtenerEfectividad', 
+        (startDate, endDate) => DescuentoAplicadoDAO.getDiscountEffectiveness(startDate, endDate)));
 
-module.exports = {
-  initializeDatabase,
-  getSalesReportData,
-  getTopProductsData,
-  setupIpcHandlers,
-  closeDB
-};
+    // Financial Reports handlers
+    ipcMain.handle('reportesFinancieros:balanceGeneral', createHandler('reportesFinancieros:balanceGeneral', 
+        (fechaHasta) => FinancialReportDAO.getBalanceSheet(fechaHasta)));
+    ipcMain.handle('reportesFinancieros:estadoResultados', createHandler('reportesFinancieros:estadoResultados', 
+        (fechaInicio, fechaFin) => FinancialReportDAO.getIncomeStatement(fechaInicio, fechaFin)));
+    ipcMain.handle('reportesFinancieros:flujoEfectivo', createHandler('reportesFinancieros:flujoEfectivo', 
+        (fechaInicio, fechaFin) => FinancialReportDAO.getCashFlowStatement(fechaInicio, fechaFin)));
+
+    // =====================================================
+    // ACCOUNTING HANDLERS
+    // =====================================================
+    ipcMain.handle('accounting:generateBalanceSheet', createHandler('accounting:generateBalanceSheet',
+        (fechaCorte) => AccountingDAO.generateBalanceSheet(fechaCorte)));
+    ipcMain.handle('accounting:generateIncomeStatement', createHandler('accounting:generateIncomeStatement',
+        (fechaInicio, fechaFin) => AccountingDAO.generateIncomeStatement(fechaInicio, fechaFin)));
+    ipcMain.handle('accounting:generateCashFlowStatement', createHandler('accounting:generateCashFlowStatement',
+        (fechaInicio, fechaFin) => AccountingDAO.generateCashFlowStatement(fechaInicio, fechaFin)));
+    
+    // Asset management
+    ipcMain.handle('accounting:createAsset', createHandler('accounting:createAsset',
+        (asset) => AccountingDAO.createAsset(asset)));
+    ipcMain.handle('accounting:getAssets', createHandler('accounting:getAssets',
+        (filters) => AccountingDAO.getAssets(filters)));
+    ipcMain.handle('accounting:updateAsset', createHandler('accounting:updateAsset',
+        (id, asset) => AccountingDAO.updateAsset(id, asset)));
+    ipcMain.handle('accounting:deleteAsset', createHandler('accounting:deleteAsset',
+        (id) => AccountingDAO.deleteAsset(id)));
+    
+    // Liability management
+    ipcMain.handle('accounting:createLiability', createHandler('accounting:createLiability',
+        (liability) => AccountingDAO.createLiability(liability)));
+    ipcMain.handle('accounting:getLiabilities', createHandler('accounting:getLiabilities',
+        (filters) => AccountingDAO.getLiabilities(filters)));
+    ipcMain.handle('accounting:payLiability', createHandler('accounting:payLiability',
+        (id, payment) => AccountingDAO.payLiability(id, payment)));
+
+    // =====================================================
+    // ENHANCED DISCOUNTS HANDLERS (New advanced features)
+    // =====================================================
+    ipcMain.handle('descuentos:aplicar', createHandler('descuentos:aplicar',
+        (descuentoId, ventaId, montoDescuento, usuarioId) => DescuentoDAO.aplicarDescuento(descuentoId, ventaId, montoDescuento, usuarioId)));
+    ipcMain.handle('descuentos:estadisticas', createHandler('descuentos:estadisticas',
+        (fechaInicio, fechaFin) => DescuentoDAO.getStatistics(fechaInicio, fechaFin)));
+    ipcMain.handle('descuentos:crearOfertasTemporada', createHandler('descuentos:crearOfertasTemporada',
+        (usuarioId) => DescuentoDAO.createSeasonalOffers(usuarioId)));
+    ipcMain.handle('descuentos:historialAplicaciones', createHandler('descuentos:historialAplicaciones',
+        (descuentoId) => DescuentoDAO.getApplicationHistory(descuentoId)));
+    ipcMain.handle('descuentos:desactivar', createHandler('descuentos:desactivar',
+        (id) => DescuentoDAO.deactivate(id)));
+
+    // =====================================================
+    // ENHANCED OFFERS HANDLERS (New advanced features)
+    // =====================================================
+    ipcMain.handle('ofertas:obtenerParaProducto', createHandler('ofertas:obtenerParaProducto',
+        (productoId) => OfertaDAO.getActiveOffersForProduct(productoId)));
+    ipcMain.handle('ofertas:agregarProducto', createHandler('ofertas:agregarProducto',
+        (ofertaId, productoId, descuentoAplicado, precioEspecial) => OfertaDAO.addProductToOffer(ofertaId, productoId, descuentoAplicado, precioEspecial)));
+    ipcMain.handle('ofertas:removerProducto', createHandler('ofertas:removerProducto',
+        (ofertaId, productoId) => OfertaDAO.removeProductFromOffer(ofertaId, productoId)));
+    ipcMain.handle('ofertas:productosDisponibles', createHandler('ofertas:productosDisponibles',
+        (ofertaId) => OfertaDAO.getAvailableProducts(ofertaId)));
+    ipcMain.handle('ofertas:estadisticas', createHandler('ofertas:estadisticas',
+        (fechaInicio, fechaFin) => OfertaDAO.getStatistics(fechaInicio, fechaFin)));
+    ipcMain.handle('ofertas:crearComunes', createHandler('ofertas:crearComunes',
+        (usuarioId) => OfertaDAO.createCommonOffers(usuarioId)));
+    ipcMain.handle('ofertas:calcularPrecio', createHandler('ofertas:calcularPrecio',
+        (precioOriginal, oferta) => OfertaDAO.calcularPrecioConOferta(precioOriginal, oferta)));
+
+    // =====================================================
+    // PURCHASES HANDLERS
+    // =====================================================
+    ipcMain.handle('compras:obtener', createHandler('compras:obtener',
+        (filters) => ComprasDAO.getAll(filters)));
+    ipcMain.handle('compras:obtenerPorId', createHandler('compras:obtenerPorId',
+        (id) => ComprasDAO.getById(id)));
+    ipcMain.handle('compras:crear', createHandler('compras:crear',
+        (compra) => ComprasDAO.create(compra)));
+    ipcMain.handle('compras:marcarRecibida', createHandler('compras:marcarRecibida',
+        (id, usuarioId) => ComprasDAO.markAsReceived(id, usuarioId)));
+    ipcMain.handle('compras:marcarPagada', createHandler('compras:marcarPagada',
+        (id, fechaPago, usuarioId) => ComprasDAO.markAsPaid(id, fechaPago, usuarioId)));
+    ipcMain.handle('compras:eliminar', createHandler('compras:eliminar',
+        (id) => ComprasDAO.delete(id)));
+    ipcMain.handle('compras:estadisticas', createHandler('compras:estadisticas',
+        (fechaInicio, fechaFin) => ComprasDAO.getStatistics(fechaInicio, fechaFin)));
+    ipcMain.handle('compras:productosTopComprados', createHandler('compras:productosTopComprados',
+        (fechaInicio, fechaFin, limite) => ComprasDAO.getTopPurchasedProducts(fechaInicio, fechaFin, limite)));
+}

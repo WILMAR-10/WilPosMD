@@ -2,14 +2,24 @@
 import React, { createContext, useState, useEffect, useContext, ReactNode } from 'react';
 import { User, UserRole } from '../types/user';
 import { PermissionAction, PermissionTarget, hasPermission, parseStoredPermissions } from '../utils/PermissionUtils';
+import BrowserSecurityService from './BrowserSecurityService';
+
+interface AuthSession {
+  token: string;
+  userId: string;
+  expirationTime: number;
+  createdAt: number;
+}
 
 interface AuthContextType {
   user: User | null;
   loading: boolean;
+  isSessionValid: boolean;
   login: (username: string, password: string) => Promise<{ success: boolean; message?: string }>;
   logout: () => void;
   hasPermission: (target: PermissionTarget, action?: PermissionAction) => boolean;
   requireAdminConfirmation: (callback: () => void) => void;
+  refreshSession: () => void;
 }
 
 const AuthContext = createContext<AuthContextType | null>(null);
@@ -21,40 +31,129 @@ interface AuthProviderProps {
 export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
+  const [isSessionValid, setIsSessionValid] = useState(false);
   const [confirmationCallback, setConfirmationCallback] = useState<(() => void) | null>(null);
   const [showConfirmation, setShowConfirmation] = useState(false);
+  const [loginAttempts, setLoginAttempts] = useState(0);
+  const MAX_LOGIN_ATTEMPTS = 5;
 
   useEffect(() => {
-    // Check if user is already logged in
-    const storedUser = localStorage.getItem('currentUser');
-    if (storedUser) {
-      setUser(JSON.parse(storedUser));
-    }
-    setLoading(false);
+    // Check if user is already logged in and session is valid
+    const checkStoredSession = () => {
+      try {
+        const encryptedSession = localStorage.getItem('userSession');
+        if (encryptedSession) {
+          const sessionData = BrowserSecurityService.decrypt(encryptedSession);
+          if (sessionData) {
+            const session: AuthSession = JSON.parse(sessionData);
+            
+            if (BrowserSecurityService.isValidSession(session)) {
+              const encryptedUser = localStorage.getItem('currentUser');
+              if (encryptedUser) {
+                const userData = BrowserSecurityService.decrypt(encryptedUser);
+                if (userData) {
+                  setUser(JSON.parse(userData));
+                  setIsSessionValid(true);
+                }
+              }
+            } else {
+              // Session expired, clean up
+              localStorage.removeItem('userSession');
+              localStorage.removeItem('currentUser');
+            }
+          }
+        }
+      } catch (error) {
+        console.error('Error checking stored session:', error);
+        localStorage.removeItem('userSession');
+        localStorage.removeItem('currentUser');
+      }
+      setLoading(false);
+    };
+
+    checkStoredSession();
+
+    // Set up session check interval (every 5 minutes)
+    const sessionCheckInterval = setInterval(() => {
+      const encryptedSession = localStorage.getItem('userSession');
+      if (encryptedSession) {
+        const sessionData = BrowserSecurityService.decrypt(encryptedSession);
+        if (sessionData) {
+          const session: AuthSession = JSON.parse(sessionData);
+          if (!BrowserSecurityService.isValidSession(session)) {
+            logout();
+          }
+        }
+      }
+    }, 5 * 60 * 1000); // Check every 5 minutes
+
+    return () => clearInterval(sessionCheckInterval);
   }, []);
 
   const login = async (username: string, password: string) => {
     try {
+      // Input validation
+      if (!username?.trim() || !password?.trim()) {
+        return { success: false, message: 'Usuario y contraseña son requeridos' };
+      }
+
+      // Rate limiting check
+      const rateLimitKey = `login_${username}`;
+      const rateLimit = BrowserSecurityService.checkRateLimit(rateLimitKey, MAX_LOGIN_ATTEMPTS);
+      
+      if (!rateLimit.allowed) {
+        const resetTime = new Date(rateLimit.resetTime!);
+        return { 
+          success: false, 
+          message: `Demasiados intentos de login. Intente nuevamente después de ${resetTime.toLocaleTimeString()}` 
+        };
+      }
+
+      // Sanitize inputs
+      const sanitizedUsername = BrowserSecurityService.sanitizeInput(username);
+      
       if (!window.api?.login) {
         throw new Error('API no disponible');
       }
       
       // Type assertion for the API response
-      const response = await window.api.login({ username, password }) as {
+      const response = await window.api.login({ 
+        username: sanitizedUsername, 
+        password 
+      }) as {
         success: boolean;
         user?: User;
         message?: string;
       };
       
       if (response.success && response.user) {
-        setUser(response.user);
-        localStorage.setItem('currentUser', JSON.stringify(response.user));
-        return { success: true };
+        // Create secure session
+        const session = BrowserSecurityService.generateSession(response.user.id.toString());
+        const encryptedSession = BrowserSecurityService.encrypt(JSON.stringify(session));
+        const encryptedUser = BrowserSecurityService.encrypt(JSON.stringify(response.user));
+        
+        if (encryptedSession && encryptedUser) {
+          localStorage.setItem('userSession', encryptedSession);
+          localStorage.setItem('currentUser', encryptedUser);
+          
+          setUser(response.user);
+          setIsSessionValid(true);
+          setLoginAttempts(0);
+          
+          // Clear rate limit on successful login
+          localStorage.removeItem(`rateLimit_${rateLimitKey}`);
+          
+          return { success: true };
+        } else {
+          throw new Error('Error al crear sesión segura');
+        }
       } else {
+        setLoginAttempts(prev => prev + 1);
         return { success: false, message: response.message || 'Credenciales inválidas' };
       }
     } catch (error) {
       console.error("Error during login:", error);
+      setLoginAttempts(prev => prev + 1);
       return { success: false, message: "Error de conexión" };
     }
   };
@@ -64,7 +163,19 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       window.api.logout();
     }
     setUser(null);
+    setIsSessionValid(false);
+    
+    // Clear all session data
     localStorage.removeItem('currentUser');
+    localStorage.removeItem('userSession');
+    
+    // Clear any rate limiting data
+    const keys = Object.keys(localStorage);
+    keys.forEach(key => {
+      if (key.startsWith('rateLimit_')) {
+        localStorage.removeItem(key);
+      }
+    });
   };
 
   // Enhanced permission checking that uses our utility
@@ -93,18 +204,22 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
 
   // Function to handle admin password verification
   const verifyAdminPassword = async (password: string) => {
-    // In a real app, you would verify this with the backend
     try {
-      // Since the API method doesn't exist, we'll implement a simple verification
-      // In a production app, you would call an API endpoint to verify
+      if (!window.api?.login) {
+        console.warn('API no disponible para verificación de administrador');
+        return false;
+      }
       
-      // For demonstration purposes only - in production, never hardcode passwords
-      // or implement client-side password verification
-      console.warn('Using mock admin password verification (for demonstration only)');
+      // Verify admin credentials through the secure API
+      const response = await window.api.login({ 
+        username: 'admin', 
+        password 
+      }) as {
+        success: boolean;
+        user?: User;
+      };
       
-      // Mock verification - in production, this should be a server-side call
-      const mockAdminPassword = 'admin123';
-      return password === mockAdminPassword;
+      return response.success && response.user?.rol === 'admin';
     } catch (error) {
       console.error('Error verifying admin password:', error);
       return false;
@@ -134,15 +249,30 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     setConfirmationCallback(null);
   };
 
+  // Function to refresh session
+  const refreshSession = () => {
+    if (user) {
+      const session = BrowserSecurityService.generateSession(user.id.toString());
+      const encryptedSession = BrowserSecurityService.encrypt(JSON.stringify(session));
+      
+      if (encryptedSession) {
+        localStorage.setItem('userSession', encryptedSession);
+        setIsSessionValid(true);
+      }
+    }
+  };
+
   return (
     <AuthContext.Provider 
       value={{ 
         user, 
         login, 
         logout, 
-        loading, 
+        loading,
+        isSessionValid,
         hasPermission: checkPermission,
-        requireAdminConfirmation
+        requireAdminConfirmation,
+        refreshSession
       }}
     >
       {children}

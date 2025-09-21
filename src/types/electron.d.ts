@@ -1,185 +1,12 @@
-// src/types/electron.d.ts
-import { 
-  Product, Category, Sale, User, Customer,
-  CashSession, Settings, InventoryMovement,
-  DailyReport, Expense, SaleDetail
-} from '../services/DatabaseService';
-
-import {PrintOptions, PrintInvoiceOptions, SavePdfOptions, SavePdfResult, PrintResult, Printer} from './printer';
-
-interface Versions {
-  node: () => string;
-  chrome: () => string;
-  electron: () => string;
-}
-
-interface FacturaState {
-  invoices: PreviewSale[];
-  selectedInvoice: PreviewSale | null;
-  loading: boolean;
-  error: string | null;
-  searchId: string;
-  startDate: Date;
-  endDate: Date;
-  previewMode: boolean;
-  currentPage: number;
-  itemsPerPage: number;
-  totalItems: number;
-  filterStatus: 'all' | 'completed' | 'cancelled';
-  filterPaymentMethod: 'all' | 'cash' | 'card' | 'transfer';
-  isSearching: boolean;
-}
-
-interface SalesResponse {
-  data: PreviewSale[];
-  total: number;
-}
-
-// Add these shared printer interfaces
-interface ElectronPrinting {
-  getPrinters: () => Promise<Array<{
-    name: string;
-    isDefault?: boolean;
-    description?: string;
-    status?: number;
-    isThermal?: boolean;
-  }>>;
-}
-
-interface ElectronPrinter {
-  getPrinters: () => Promise<Array<{
-    name: string;
-    description?: string;
-    isDefault?: boolean;
-    isThermal?: boolean;
-  }>>;
-  print: (options: PrintOptions) => Promise<{ success: boolean; error?: string }>;
-}
-
-interface AppPaths {
-  userData: string;
-  documents: string;
-  downloads: string;
-  temp: string;
-  exe: string;
-  appData: string;
-  appPath: string;
-}
-
-interface CancelSaleResult {
-  success: boolean;
-  error?: string;
-}
-
-interface SaleWithDetails {
-  id: number;
-  fecha_venta: string;
-  cliente?: string;
-  total: number;
-  detalles: SaleDetail[];
-}
-
-interface ApiResponse {
-  success: boolean;
-  error?: string;
-  message?: string;
-  id?: number;
-}
-
-interface UserData {
-  id?: number;
-  nombre: string;
-  usuario: string;
-  clave?: string;
-  rol: 'admin' | 'cajero' | 'empleado';
-  permisos: string | Record<string, boolean>;
-  activo?: number;
-  fecha_creacion?: string;
-}
-
-interface UserUpdateData {
-  nombre: string;
-  usuario: string;
-  clave?: string;
-  rol: 'admin' | 'cajero' | 'empleado';
-  permisos: string;
-}
-
-// Interface for sync events
-interface SyncEvent {
-  type: string;
-  data?: any;
-  timestamp: number;
-}
-
-// Print and PDF API types
-interface PrintResult {
-  success: boolean;
-  error?: string;
-}
-
-interface SavePdfResult {
-  success: boolean;
-  path?: string;
-  error?: string;
-}
-
-interface PrintOptions {
-  html: string;
-  printerName?: string;
-  options?: {
-    silent?: boolean;
-    printBackground?: boolean;
-    deviceName?: string;
-    color?: boolean;
-    margins?: {
-      marginType?: string;
-      top?: number;
-      bottom?: number;
-      left?: number;
-      right?: number;
-    };
-    landscape?: boolean;
-    scaleFactor?: number;
-    pagesPerSheet?: number;
-    collate?: boolean;
-    copies?: number;
-    pageRanges?: Array<{
-      from: number;
-      to: number;
-    }>;
-    duplexMode?: string;
-    [key: string]: any;
-  };
-}
-
-interface SavePdfOptions {
-  path: string;
-  html: string;
-  options?: {
-    landscape?: boolean;
-    printBackground?: boolean;
-    scale?: number;
-    pageSize?: string | { width: number; height: number };
-    margins?: {
-      top?: number;
-      bottom?: number;
-      left?: number;
-      right?: number;
-    };
-    pageRanges?: string;
-    headerTemplate?: string;
-    footerTemplate?: string;
-    preferCSSPageSize?: boolean;
-    [key: string]: any;
-  };
-}
-
+// src/types/electron.d.ts - Actualizado con API unificada
 declare global {
   interface Window {
-    versions: Versions;
-    electronPrinter: ElectronPrinter;
-    electronPrinting?: ElectronPrinting;
+    versions: {
+      node: () => string;
+      chrome: () => string;
+      electron: () => string;
+    };
+
     api?: {
       // Window controls
       openFolder: (folderPath: string) => Promise<boolean>;
@@ -187,141 +14,271 @@ declare global {
       maximize: () => Promise<boolean>;
       close: () => Promise<boolean>;
       
-      // Server connection (if application can connect to remote server)
-      connectToServer: (serverDetails: any) => Promise<boolean>;
-      getConnectionStatus: () => Promise<{ connected: boolean; message?: string }>;
-      
-      // Authentication handlers
+      // Authentication
       login: (credentials: { username: string; password: string }) => Promise<{
         success: boolean;
-        user?: User;
+        user?: any;
         message?: string;
       }>;
       logout: () => Promise<boolean>;
       
-      // User management
-      getUsers: () => Promise<UserData[]>;
-      addUser: (user: UserUpdateData) => Promise<ApiResponse>;
-      updateUser: (id: number, user: UserUpdateData) => Promise<ApiResponse>;
-      deleteUser: (id: number) => Promise<ApiResponse>;
-      
-      // Database
+      // Database operations
       initializeDatabase: () => Promise<boolean>;
-      
-      // Products
-      getProducts: () => Promise<Product[]>;
-      addProduct: (product: Product) => Promise<Product>;
-      updateProduct: (id: number, product: Product) => Promise<Product>;
+      getProducts: () => Promise<any[]>;
+      addProduct: (product: any) => Promise<any>;
+      updateProduct: (id: number, product: any) => Promise<any>;
       deleteProduct: (id: number) => Promise<boolean>;
-      
-      // Categories
-      getCategories: () => Promise<Category[]>;
-      addCategory: (category: Category) => Promise<Category>;
-      updateCategory: (id: number, category: Category) => Promise<Category>;
+      getCategories: () => Promise<any[]>;
+      addCategory: (category: any) => Promise<any>;
+      updateCategory: (id: number, category: any) => Promise<any>;
       deleteCategory: (id: number) => Promise<boolean>;
-      
-      // Customers
-      getCustomers: () => Promise<Customer[]>;
-      addCustomer: (customer: Customer) => Promise<Customer>;
-      updateCustomer: (id: number, customer: Customer) => Promise<Customer>;
-      deleteCustomer: (id: number) => Promise<boolean>;
-      
-      // Sales
-      createSale: (sale: Sale, details?: SaleDetail[]) => Promise<SaleResponse>;
-      getSales: (filters?: any) => Promise<PreviewSale[]>;
-      getSaleDetails: (id: number) => Promise<Sale>;
-      
-      // Report handlers
-      getDailySalesReport: (date: string) => Promise<any>,
-      getMonthlyReport: (month: string, year: string) => Promise<any>,
-      getSalesReport: (startDate: string, endDate: string) => Promise<any>,
-      getTopProducts: (startDate: string, endDate: string, limit?: number) => Promise<any>,
-      getDailyReports: (params: { startDate: string, endDate: string }) => Promise<DailyReport[]>,
-      
-      // Customers handlers
-      getCustomers: () => Promise<any>;
+      getCustomers: () => Promise<any[]>;
       addCustomer: (customer: any) => Promise<any>;
       updateCustomer: (id: number, customer: any) => Promise<any>;
-      deleteCustomer: (id: number) => Promise<any>;
-      
-      // Users
-      getUsers: () => Promise<User[]>;
-      addUser: (user: User) => Promise<User>;
-      updateUser: (id: number, user: User) => Promise<User>;
+      deleteCustomer: (id: number) => Promise<boolean>;
+      getUsers: () => Promise<any[]>;
+      addUser: (user: any) => Promise<any>;
+      updateUser: (id: number, user: any) => Promise<any>;
       deleteUser: (id: number) => Promise<boolean>;
+      createSale: (sale: any, details?: any[]) => Promise<any>;
+      getSales: (filters?: any) => Promise<any[]>;
+      getSaleDetails: (id: number) => Promise<any>;
+      cancelSale: (id: number) => Promise<{ success: boolean; error?: string }>;
       
-      // Cash Register
-      getCurrentCashSession: () => Promise<CashSession | null>;
-      openCashSession: (data: { monto_inicial: number; notas_apertura?: string }) => Promise<CashSession>;
-      closeCashSession: (data: { id: number; monto_final: number; notas_cierre?: string }) => Promise<CashSession>;
-      addCashTransaction: (data: { sesion_id: number; tipo: string; monto: number; concepto: string; referencia?: string }) => Promise<any>;
-      getCashTransactions: (sesion_id: number) => Promise<any[]>;
+      // Reports
+      getDailySalesReport: (date: string) => Promise<any>;
+      getMonthlyReport: (month: string, year: string) => Promise<any>;
+      getSalesReport: (startDate: string, endDate: string) => Promise<any>;
+      getTopProducts: (startDate: string, endDate: string, limit?: number) => Promise<any>;
       
-      // Expenses
-      getExpenses: (filters?: any) => Promise<Expense[]>;
-      addExpense: (expense: Expense) => Promise<Expense>;
-      updateExpense: (id: number, expense: Expense) => Promise<Expense>;
-      deleteExpense: (id: number) => Promise<boolean>;
+      // Descuentos
+      getDiscounts: () => Promise<any>;
+      getDiscountById: (id: number) => Promise<any>;
+      getActiveDiscounts: () => Promise<any>;
+      createDiscount: (discount: any) => Promise<any>;
+      updateDiscount: (id: number, discount: any) => Promise<any>;
+      deleteDiscount: (id: number) => Promise<boolean>;
+      toggleDiscountActive: (id: number) => Promise<boolean>;
+      getApplicableDiscounts: (productos: any[], total: number, categoria?: string) => Promise<any>;
+      getDiscountByCoupon: (codigo: string) => Promise<any>;
       
-      // Inventory movements
-      getInventoryMovements: (filters?: any) => Promise<InventoryMovement[]>;
-      addInventoryMovement: (movement: InventoryMovement) => Promise<InventoryMovement>;
+      // Ofertas
+      getOffers: () => Promise<any>;
+      getOfferById: (id: number) => Promise<any>;
+      getActiveOffers: () => Promise<any>;
+      createOffer: (offer: any) => Promise<any>;
+      updateOffer: (id: number, offer: any) => Promise<any>;
+      deleteOffer: (id: number) => Promise<boolean>;
+      toggleOfferActive: (id: number) => Promise<boolean>;
+      getApplicableOffers: (productos: any[]) => Promise<any>;
+      calculateOfferDiscount: (offer: any, productos: any[]) => Promise<number>;
+      
+      // Descuentos aplicados
+      getAppliedDiscounts: () => Promise<any>;
+      getAppliedDiscountsByVenta: (ventaId: number) => Promise<any>;
+      createAppliedDiscount: (appliedDiscount: any) => Promise<any>;
+      getDiscountTotalsByPeriod: (startDate: string, endDate: string) => Promise<any>;
+      getMostUsedDiscounts: (startDate: string, endDate: string, limit?: number) => Promise<any>;
+      getDiscountEffectiveness: (startDate: string, endDate: string) => Promise<any>;
+      
+      // Reportes Financieros
+      getBalanceSheet: (fechaHasta?: string) => Promise<any>;
+      getIncomeStatement: (fechaInicio: string, fechaFin: string) => Promise<any>;
+      getCashFlowStatement: (fechaInicio: string, fechaFin: string) => Promise<any>;
       
       // Settings
-      getSettings?: () => Promise<any>;
-      getSettings: () => Promise<Settings>;
-      saveSettings: (settings: Settings) => Promise<Settings>;
+      getSettings: () => Promise<any>;
+      saveSettings: (settings: any) => Promise<any>;
+      
+      // File system
+      getAppPaths: () => Promise<{
+        userData: string;
+        documents: string;
+        downloads: string;
+        temp: string;
+        exe: string;
+        appData: string;
+        appPath: string;
+      }>;
+      ensureDir: (folderPath: string) => Promise<{ success: boolean; error?: string }>;
       
       // Window management
-      openComponentWindow: (component: string) => Promise<{ windowId: number; cached: boolean; success: boolean; error?: string }>;
-      identifyWindow: () => Promise<{ type: string; id?: number; component?: string; error?: string }>;
+      openComponentWindow: (component: string) => Promise<{
+        windowId: number;
+        cached: boolean;
+        success: boolean;
+        error?: string;
+      }>;
+      identifyWindow: () => Promise<{
+        type: string;
+        id?: number;
+        component?: string;
+        error?: string;
+      }>;
       
-      // Event listeners
-      onAppReady: (callback: (data: any) => void) => void;
-      onShowLicenseActivation: (callback: () => void) => void;
-      removeAllListeners: (channel?: string) => void;
-
-      // PDF and printer methods
-      getPDFPath: () => Promise<string>;
-      getPrinters: () => Promise<Printer[]>;
-      printInvoice: (options: PrintInvoiceOptions) => Promise<PrintResult>;
-      savePdf: (options: SavePdfOptions) => Promise<SavePdfResult>;
-      print: (options: PrintOptions) => Promise<PrintResult>;
-
-      getAppPaths: () => Promise<AppPaths>;
-      cancelSale: (id: number) => Promise<CancelSaleResult>;
-
-      // Sync event methods
-      registerSyncListener: () => void,
-      unregisterSyncListener: () => void,
-      broadcastSyncEvent: (event: SyncEvent) => void,
-      testPrinter: (printerName?: string) => Promise<PrintResult>,
-
-      ensureDir?: (folderPath: string) => Promise<{ success: boolean; error?: string }>;
-      sendMail?: (opts: {
-        subject: string;
-        body: string;
-        attachments?: string[];
-      }) => Promise<{ success: boolean; error?: string }>;
-      
-      printRaw?: (text: string, printerName?: string) => Promise<PrintResult>;
-      testPrinter?: (printerName?: string) => Promise<PrintResult>;
+      // Sync events
+      registerSyncListener: () => void;
+      unregisterSyncListener: () => void;
+      broadcastSyncEvent: (event: any) => void;
     };
-    printerApi: {
-      getPrinters: () => Promise<{ success: boolean; printers: Printer[]; error?: string }>;
-      print: (opts: PrintOptions) => Promise<PrintResult>;
-      savePdf: (opts: SavePdfOptions) => Promise<SavePdfResult>;
-      getPdfPath?: () => Promise<string | null>;
-      printRaw: (data: string | Uint8Array, printerName?: string) => Promise<PrintResult>;
-      testPrinter: (printerName?: string) => Promise<PrintResult>;
+
+    // API DE IMPRESIÓN UNIFICADA (nombre correcto)
+    printerAPI: {
+      // Obtener impresoras
+      getPrinters: () => Promise<{
+        success: boolean;
+        printers: Array<{
+          name: string;
+          isDefault: boolean;
+          status: string;
+          isThermal: boolean;
+          paperWidth: number | null;
+        }>;
+        error?: string;
+      }>;
+
+      // Imprimir factura
+      printInvoice: (
+        saleData: {
+          id?: number;
+          businessName?: string;
+          businessInfo?: string;
+          fecha_venta: string;
+          cliente: string;
+          usuario?: string;
+          total: number;
+          subtotal?: number;
+          impuestos?: number;
+          descuento?: number;
+          metodo_pago: string;
+          monto_recibido?: number;
+          cambio?: number;
+          mensaje?: string;
+          detalles: Array<{
+            name: string;
+            quantity: number;
+            price: number;
+            subtotal: number;
+          }>;
+        },
+        printerName: string
+      ) => Promise<{
+        success: boolean;
+        error?: string;
+        message?: string;
+      }>;
+
+      // Imprimir etiqueta
+      printLabel: (
+        labelData: {
+          name: string;
+          price: number;
+          barcode?: string;
+          category?: string;
+        },
+        printerName: string
+      ) => Promise<{
+        success: boolean;
+        error?: string;
+        message?: string;
+      }>;
+
+      // Imprimir código de barras
+      printBarcode: (
+        barcodeData: {
+          text?: string;
+          barcode?: string;
+          name?: string;
+          price?: number;
+        },
+        printerName: string
+      ) => Promise<{
+        success: boolean;
+        error?: string;
+        message?: string;
+      }>;
+
+      // Imprimir código QR
+      printQR: (
+        qrData: {
+          text?: string;
+          url?: string;
+          title?: string;
+        },
+        printerName: string
+      ) => Promise<{
+        success: boolean;
+        error?: string;
+        message?: string;
+      }>;
+
+      // Imprimir datos raw
+      printRaw: (
+        data: string | Uint8Array,
+        printerName: string
+      ) => Promise<{
+        success: boolean;
+        error?: string;
+        message?: string;
+      }>;
+
+      // Probar impresora
+      testPrinter: (printerName: string) => Promise<{
+        success: boolean;
+        error?: string;
+        message?: string;
+      }>;
+
+      // Abrir cajón de dinero
+      openCashDrawer: (printerName: string) => Promise<{
+        success: boolean;
+        error?: string;
+        message?: string;
+      }>;
+
+      // Guardar PDF
+      savePdf: (options: {
+        html: string;
+        path: string;
+        printBackground?: boolean;
+        margins?: {
+          top?: number;
+          right?: number;
+          bottom?: number;
+          left?: number;
+        };
+        format?: string;
+      }) => Promise<{
+        success: boolean;
+        path?: string;
+        error?: string;
+      }>;
     };
-    electron?: {
-      app: {
-        getState: () => Promise<any>;
-        setState: (state: any) => Promise<void>;
-      };
+
+    // Mantener compatibilidad con APIs anteriores
+    printApi?: {
+      getPrinters: () => Promise<{ success: boolean; printers: any[]; error?: string }>;
+      printFactura: (html: string, printerName: string) => Promise<{ success: boolean; error?: string }>;
+      printEtiqueta: (html: string, printerName: string) => Promise<{ success: boolean; error?: string }>;
+      printBarcode: (html: string, printerName: string) => Promise<{ success: boolean; error?: string }>;
+      printQR: (html: string, printerName: string) => Promise<{ success: boolean; error?: string }>;
+      printRaw: (data: string | Uint8Array, printerName?: string) => Promise<{ success: boolean; error?: string }>;
+      testPrinter: (printerName?: string) => Promise<{ success: boolean; error?: string }>;
+      savePdf: (options: any) => Promise<{ success: boolean; path?: string; error?: string }>;
+    };
+
+    printerApi?: {
+      getPrinters: () => Promise<{ success: boolean; printers: any[]; error?: string }>;
+      printRaw: (data: string | Uint8Array, printerName?: string) => Promise<{ success: boolean; error?: string }>;
+      testPrinter: (printerName?: string) => Promise<{ success: boolean; error?: string }>;
+      savePdf: (options: any) => Promise<{ success: boolean; path?: string; error?: string }>;
+      printFactura: (html: string, printerName: string) => Promise<{ success: boolean; error?: string }>;
+      printEtiqueta: (html: string, printerName: string) => Promise<{ success: boolean; error?: string }>;
+      printBarcode: (html: string, printerName: string) => Promise<{ success: boolean; error?: string }>;
+      printQR: (html: string, printerName: string) => Promise<{ success: boolean; error?: string }>;
+      openCashDrawer: (printerName: string) => Promise<{ success: boolean; error?: string }>;
     };
   }
 }
 
-export { type PrintInvoiceOptions };
+export {};

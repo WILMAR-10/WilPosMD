@@ -816,10 +816,17 @@ export const VentaDAO = {
             const result = transaction();
             console.log("Transaction result:", result);
             
-            // If successful, generate receipt
+            // If successful, conditionally generate receipt
             if (result.success) {
-                // Store the promise for PDF generation
-                result.receiptPromise = VentaDAO.generateReceipt(result.id);
+                // Check configuration to see if PDF should be generated
+                const shouldGeneratePDF = VentaDAO.shouldGenerateReceipt();
+                
+                if (shouldGeneratePDF) {
+                    // Store the promise for PDF generation
+                    result.receiptPromise = VentaDAO.generateReceipt(result.id);
+                } else {
+                    console.log('📄 PDF generation skipped based on configuration');
+                }
             }
             
             return result;
@@ -831,6 +838,43 @@ export const VentaDAO = {
                 error: error.message || 'Error desconocido al crear venta',
                 details: error.toString()
             };
+        }
+    },
+
+    // Determinar si se debe generar PDF basado en configuración
+    shouldGenerateReceipt: () => {
+        try {
+            const db = getDB();
+            
+            // Obtener configuración de PDF
+            const config = db.prepare(`
+                SELECT guardar_pdf, impresora_termica 
+                FROM configuracion 
+                LIMIT 1
+            `).get();
+            
+            if (!config) {
+                // Por defecto, solo generar PDF si no hay impresora térmica configurada
+                return true;
+            }
+            
+            // Si está configurado explícitamente para guardar PDF, hacerlo
+            if (config.guardar_pdf === 1) {
+                return true;
+            }
+            
+            // Si no hay impresora térmica configurada, generar PDF como respaldo
+            if (!config.impresora_termica) {
+                return true;
+            }
+            
+            // Si hay impresora térmica y no se configuró guardar PDF, no generar
+            return false;
+            
+        } catch (error) {
+            console.error('Error checking PDF configuration:', error);
+            // En caso de error, generar PDF por seguridad
+            return true;
         }
     },
 

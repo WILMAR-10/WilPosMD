@@ -1,19 +1,18 @@
-﻿// src/pages/Factura.tsx - Improved invoice management component
+﻿// src/pages/Factura.tsx - Componente de gestión de facturas con sistema de impresión avanzado
 import React, { useState, useEffect, useRef } from 'react';
 import { 
   Printer, Download, ChevronLeft, Search, 
-  Filter, RotateCcw, FileText,
-  Eye, XCircle,
-  AlertTriangle, X, Check, Folder
+  Filter, RotateCcw, FileText, Eye, XCircle,
+  AlertTriangle, X, Check, Folder, Settings
 } from 'lucide-react';
 import { useAuth } from '../services/AuthContext';
-import { useSettings } from '../services/DatabaseService';
+import { useSettings, useProducts } from '../services/DatabaseService';
 import FacturaViewer from '../components/FacturaViewer';
 import ConfirmDialog from '../components/ConfirmDialog';
-import InvoiceManager from '../services/InvoiceManager';
 import DatePicker from 'react-datepicker';
 import "react-datepicker/dist/react-datepicker.css";
 import { PreviewSale } from '../types/sales';
+import { Product } from '../services/DatabaseService';
 
 // Tipos
 type AlertType = 'success' | 'warning' | 'error' | 'info';
@@ -40,10 +39,17 @@ interface SalesResponse {
   total: number;
 }
 
+interface PrinterInfo {
+  name: string;
+  isDefault?: boolean;
+  status?: string;
+}
+
+
 const Factura: React.FC = () => {
   const { user } = useAuth();
   const { settings } = useSettings();
-  const invoiceManager = InvoiceManager.getInstance();
+  const { products, loading: loadingProducts } = useProducts();
   const facturaRef = useRef<HTMLDivElement>(null);
   
   // Estado principal
@@ -64,6 +70,12 @@ const Factura: React.FC = () => {
     isSearching: false
   });
   
+  // Estados del sistema de impresión
+  const [printers, setPrinters] = useState<PrinterInfo[]>([]);
+  const [selectedPrinter, setSelectedPrinter] = useState<string>('');
+  const [loadingPrinters, setLoadingPrinters] = useState<boolean>(false);
+  
+  
   // Estado para alertas
   const [alert, setAlert] = useState<{ type: AlertType; message: string } | null>(null);
   
@@ -79,21 +91,15 @@ const Factura: React.FC = () => {
   // Estado para manejo de envío
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // Cargar configuración cuando inicia el componente
+  // Cargar impresoras al inicializar
   useEffect(() => {
-    const loadSettings = async () => {
-      try {
-        if (window.api?.getSettings) {
-          const appSettings = await window.api.getSettings();
-          console.log("Configuración cargada:", appSettings);
-        }
-      } catch (error) {
-        console.error('Error al cargar configuración:', error);
-      }
-    };
+    loadPrinters();
     
-    loadSettings();
-  }, []);
+    // Configurar impresora por defecto desde configuración
+    if (settings?.impresora_termica) {
+      setSelectedPrinter(settings.impresora_termica);
+    }
+  }, [settings]);
 
   // Cargar facturas
   useEffect(() => {
@@ -104,6 +110,37 @@ const Factura: React.FC = () => {
     state.filterStatus, 
     state.filterPaymentMethod
   ]);
+
+  // Cargar impresoras disponibles
+  const loadPrinters = async () => {
+    try {
+      setLoadingPrinters(true);
+      const result = await window.printApi.getPrinters();
+      
+      if (result.success) {
+        setPrinters(result.printers);
+        
+        // Si no hay impresora seleccionada, usar la por defecto
+        if (!selectedPrinter && result.printers.length > 0) {
+          const defaultPrinter = result.printers.find(p => p.isDefault);
+          if (defaultPrinter) {
+            setSelectedPrinter(defaultPrinter.name);
+          } else if (settings?.impresora_termica) {
+            setSelectedPrinter(settings.impresora_termica);
+          } else {
+            setSelectedPrinter(result.printers[0].name);
+          }
+        }
+      } else {
+        showAlert('warning', 'Error al cargar impresoras: ' + (result.error || 'Desconocido'));
+      }
+    } catch (error) {
+      console.error('Error loading printers:', error);
+      showAlert('error', 'Error inesperado al cargar impresoras');
+    } finally {
+      setLoadingPrinters(false);
+    }
+  };
 
   // Función para cargar facturas con filtros
   const fetchInvoices = async () => {
@@ -161,10 +198,10 @@ const Factura: React.FC = () => {
 
   // Función para validar el método de pago y convertirlo al tipo esperado
   const validatePaymentMethod = (method: string | undefined | null): 'Efectivo' | 'Tarjeta' | 'Transferencia' => {
-    if (!method) return 'Efectivo'; // Handle null/undefined values
+    if (!method) return 'Efectivo';
     
     const validMethods = ['Efectivo', 'Tarjeta', 'Transferencia'];
-    const normalizedMethod = method.trim(); // Remove whitespace
+    const normalizedMethod = method.trim();
     
     if (validMethods.includes(normalizedMethod)) {
       return normalizedMethod as 'Efectivo' | 'Tarjeta' | 'Transferencia';
@@ -172,6 +209,304 @@ const Factura: React.FC = () => {
     
     console.warn(`Método de pago inválido: "${method}", usando "Efectivo" por defecto`);
     return 'Efectivo';
+  };
+
+  // Generar HTML de factura para impresión
+  const generateInvoiceHTML = (saleData: PreviewSale): string => {
+    const businessInfo = {
+      name: settings?.nombre_negocio || 'WilPOS',
+      address: settings?.direccion || '',
+      phone: settings?.telefono || '',
+      email: settings?.email || '',
+      rnc: settings?.rnc || '',
+      website: settings?.sitio_web || '',
+      logo: settings?.logo || '',
+      message: settings?.mensaje_recibo || 'Gracias por su compra'
+    };
+
+    const currency = settings?.moneda || 'RD$';
+    const taxName = settings?.impuesto_nombre || 'ITEBIS';
+
+    return `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="UTF-8">
+        <title>Factura #${saleData.id || 'PREVIEW'}</title>
+        <style>
+          * { margin: 0; padding: 0; box-sizing: border-box; }
+          body { 
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+            line-height: 1.4; 
+            color: #333; 
+            max-width: 800px; 
+            margin: 0 auto; 
+            padding: 20px; 
+            background: white;
+          }
+          .header { 
+            text-align: center; 
+            border-bottom: 3px solid #2563eb; 
+            padding-bottom: 15px; 
+            margin-bottom: 25px; 
+          }
+          .company-name { 
+            font-size: 28px; 
+            font-weight: bold; 
+            color: #1f2937; 
+            margin-bottom: 5px; 
+          }
+          .company-details { 
+            color: #6b7280; 
+            font-size: 14px; 
+            margin-top: 8px; 
+          }
+          .invoice-info { 
+            display: grid; 
+            grid-template-columns: 1fr 1fr; 
+            gap: 20px; 
+            margin-bottom: 25px; 
+            padding: 15px; 
+            background: #f9fafb; 
+            border-radius: 8px; 
+          }
+          .invoice-info h3 { 
+            color: #374151; 
+            font-size: 16px; 
+            margin-bottom: 8px; 
+            border-bottom: 1px solid #e5e7eb; 
+            padding-bottom: 4px; 
+          }
+          .invoice-info p { 
+            margin: 4px 0; 
+            font-size: 14px; 
+          }
+          .items-table { 
+            width: 100%; 
+            border-collapse: collapse; 
+            margin: 20px 0; 
+            border-radius: 8px; 
+            overflow: hidden; 
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1); 
+          }
+          .items-table th { 
+            background: #374151; 
+            color: white; 
+            padding: 12px 8px; 
+            text-align: left; 
+            font-weight: 600; 
+            font-size: 14px; 
+          }
+          .items-table td { 
+            padding: 10px 8px; 
+            border-bottom: 1px solid #e5e7eb; 
+            font-size: 14px; 
+          }
+          .items-table tr:nth-child(even) { 
+            background: #f9fafb; 
+          }
+          .items-table .text-right { 
+            text-align: right; 
+          }
+          .totals { 
+            margin-top: 20px; 
+            padding: 20px; 
+            background: #f3f4f6; 
+            border-radius: 8px; 
+          }
+          .totals-row { 
+            display: flex; 
+            justify-content: space-between; 
+            padding: 4px 0; 
+            font-size: 14px; 
+          }
+          .totals-row.total { 
+            font-size: 18px; 
+            font-weight: bold; 
+            color: #1f2937; 
+            border-top: 2px solid #d1d5db; 
+            padding-top: 8px; 
+            margin-top: 8px; 
+          }
+          .payment-info { 
+            margin-top: 20px; 
+            padding: 15px; 
+            background: #ecfdf5; 
+            border-left: 4px solid #10b981; 
+            border-radius: 4px; 
+          }
+          .thank-you { 
+            text-align: center; 
+            margin-top: 30px; 
+            padding: 20px; 
+            background: #eff6ff; 
+            border-radius: 8px; 
+            color: #1e40af; 
+            font-weight: 500; 
+          }
+          .logo { 
+            max-width: 120px; 
+            max-height: 80px; 
+            margin-bottom: 10px; 
+          }
+          @media print {
+            body { padding: 0; margin: 0; }
+            .no-print { display: none; }
+          }
+        </style>
+      </head>
+      <body>
+        <div class="header">
+          ${businessInfo.logo ? `<img src="${businessInfo.logo}" alt="Logo" class="logo">` : ''}
+          <div class="company-name">${businessInfo.name}</div>
+          <div class="company-details">
+            ${businessInfo.rnc ? `RNC: ${businessInfo.rnc}<br>` : ''}
+            ${businessInfo.address ? `${businessInfo.address}<br>` : ''}
+            ${businessInfo.phone ? `Tel: ${businessInfo.phone}` : ''}
+            ${businessInfo.email ? ` | Email: ${businessInfo.email}` : ''}
+            ${businessInfo.website ? `<br>Web: ${businessInfo.website}` : ''}
+          </div>
+        </div>
+
+        <div class="invoice-info">
+          <div>
+            <h3>Información de la Factura</h3>
+            <p><strong>Número:</strong> ${saleData.id ? String(saleData.id).padStart(6, '0') : 'PREVIEW'}</p>
+            <p><strong>Fecha:</strong> ${new Date(saleData.fecha_venta).toLocaleDateString('es-DO')}</p>
+            <p><strong>Hora:</strong> ${new Date(saleData.fecha_venta).toLocaleTimeString('es-DO')}</p>
+            <p><strong>Vendedor:</strong> ${saleData.usuario || 'Sistema'}</p>
+          </div>
+          <div>
+            <h3>Información del Cliente</h3>
+            <p><strong>Cliente:</strong> ${saleData.cliente}</p>
+            <p><strong>Método de Pago:</strong> ${saleData.metodo_pago}</p>
+            ${saleData.metodo_pago === 'Efectivo' ? `
+              <p><strong>Monto Recibido:</strong> ${currency} ${saleData.monto_recibido?.toFixed(2) || '0.00'}</p>
+              <p><strong>Cambio:</strong> ${currency} ${saleData.cambio?.toFixed(2) || '0.00'}</p>
+            ` : ''}
+          </div>
+        </div>
+
+        <table class="items-table">
+          <thead>
+            <tr>
+              <th>Descripción</th>
+              <th class="text-right">Cant.</th>
+              <th class="text-right">Precio Unit.</th>
+              <th class="text-right">Subtotal</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${saleData.detalles.map(item => `
+              <tr>
+                <td>${item.name}</td>
+                <td class="text-right">${item.quantity}</td>
+                <td class="text-right">${currency} ${item.price.toFixed(2)}</td>
+                <td class="text-right">${currency} ${item.subtotal.toFixed(2)}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+
+        <div class="totals">
+          <div class="totals-row">
+            <span>Subtotal (sin impuesto):</span>
+            <span>${currency} ${(saleData.total - saleData.impuestos + saleData.descuento).toFixed(2)}</span>
+          </div>
+          <div class="totals-row">
+            <span>${taxName} (${((settings?.impuesto_porcentaje || 0.18) * 100).toFixed(0)}%):</span>
+            <span>${currency} ${saleData.impuestos.toFixed(2)}</span>
+          </div>
+          ${saleData.descuento > 0 ? `
+            <div class="totals-row">
+              <span>Descuento:</span>
+              <span>-${currency} ${saleData.descuento.toFixed(2)}</span>
+            </div>
+          ` : ''}
+          <div class="totals-row total">
+            <span>TOTAL:</span>
+            <span>${currency} ${saleData.total.toFixed(2)}</span>
+          </div>
+        </div>
+
+        ${saleData.notas ? `
+          <div class="payment-info">
+            <p><strong>Notas:</strong> ${saleData.notas}</p>
+          </div>
+        ` : ''}
+
+        <div class="thank-you">
+          ${businessInfo.message}
+        </div>
+      </body>
+      </html>
+    `;
+  };
+
+  // Probar impresora
+  const handleTestPrinter = async () => {
+    if (!selectedPrinter) {
+      showAlert('warning', 'Por favor selecciona una impresora');
+      return;
+    }
+
+    setIsSubmitting(true);
+    
+    try {
+      const result = await window.printApi.testPrinter(selectedPrinter);
+      
+      if (result.success) {
+        showAlert('success', 'Prueba de impresora enviada correctamente');
+      } else {
+        throw new Error(result.error || 'Error desconocido');
+      }
+    } catch (err) {
+      console.error(err);
+      showAlert('error', `Error al probar impresora: ${(err as Error).message}`);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  // Imprimir factura
+  const handlePrintInvoice = async () => {
+    if (!state.selectedInvoice) {
+      showAlert('warning', 'No hay factura seleccionada para imprimir');
+      return;
+    }
+
+    if (!selectedPrinter) {
+      showAlert('warning', 'Por favor selecciona una impresora');
+      return;
+    }
+
+    setIsSubmitting(true);
+    
+    try {
+      const html = generateInvoiceHTML(state.selectedInvoice);
+      const result = await window.printApi.printFactura(html, selectedPrinter);
+      
+      if (result.success) {
+        showAlert('success', 'Factura impresa correctamente');
+        
+        // Abrir cajón si está configurado
+        if (settings?.open_cash_drawer) {
+          try {
+            const openDrawerCommand = '\x1B\x70\x00\x19\x19';
+            await window.printApi.printRaw(openDrawerCommand, selectedPrinter);
+          } catch (drawerError) {
+            console.warn('Error opening cash drawer:', drawerError);
+          }
+        }
+      } else {
+        throw new Error(result.error || 'Error desconocido');
+      }
+    } catch (err) {
+      console.error(err);
+      showAlert('error', `Error al imprimir: ${(err as Error).message}`);
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   // Función para buscar factura por ID
@@ -199,11 +534,10 @@ const Factura: React.FC = () => {
       const invoice = await window.api.getSaleDetails(id);
       
       if (invoice) {
-        // Asegurar que el método de pago es uno de los valores esperados
         const validatedInvoice = {
           ...invoice,
           metodo_pago: validatePaymentMethod(invoice.metodo_pago)
-        } as unknown as PreviewSale ;
+        } as unknown as PreviewSale;
         
         setState(prev => ({ 
           ...prev, 
@@ -225,7 +559,7 @@ const Factura: React.FC = () => {
 
   // Función para buscar por fecha
   const handleDateSearch = () => {
-    setState(prev => ({ ...prev, currentPage: 1 })); // Reset to page 1
+    setState(prev => ({ ...prev, currentPage: 1 }));
     fetchInvoices();
   };
 
@@ -263,7 +597,6 @@ const Factura: React.FC = () => {
       const invoice = await window.api.getSaleDetails(id);
       
       if (invoice) {
-        // Asegurar que el método de pago es uno de los valores esperados
         const validatedInvoice = {
           ...invoice,
           metodo_pago: validatePaymentMethod(invoice.metodo_pago)
@@ -286,62 +619,48 @@ const Factura: React.FC = () => {
     }
   };
 
-  // Exportar factura como PDF simplificado
-  const handleExportPDF = async () => {
+  // Guardar PDF
+  const handleSavePDF = async () => {
     if (!state.selectedInvoice) {
-      showAlert('warning', 'No hay factura seleccionada para exportar');
+      showAlert('warning', 'No hay factura seleccionada para guardar');
       return;
     }
 
-    try {
-      if (!facturaRef.current) {
-        throw new Error('Referencia de factura no disponible');
-      }
+    if (!settings?.guardar_pdf) {
+      showAlert('warning', 'El guardado de PDF no está habilitado en la configuración');
+      return;
+    }
 
-      const htmlContent = facturaRef.current.outerHTML;
-      const mgr = InvoiceManager.getInstance();
-      const pdfPath = await mgr.saveAsPdf(
-        state.selectedInvoice,
-        htmlContent,
-        {
-          directory: settings?.ruta_pdf || '',
-          filename: `factura-${state.selectedInvoice.id}-${new Date().toISOString().split('T')[0]}.pdf`
+    setIsSubmitting(true);
+    
+    try {
+      const html = generateInvoiceHTML(state.selectedInvoice);
+      const fileName = `factura-${state.selectedInvoice.id || 'preview'}-${Date.now()}.pdf`;
+      const filePath = `${settings.ruta_pdf}/${fileName}`;
+      
+      const result = await window.printApi.savePdf({
+        html,
+        path: filePath,
+        options: {
+          format: 'A4',
+          printBackground: true,
+          margins: {
+            top: 0.5,
+            bottom: 0.5,
+            left: 0.5,
+            right: 0.5
+          }
         }
-      );
-
-      if (pdfPath) {
-        showAlert('success', `Factura guardada como PDF: ${pdfPath}`);
+      });
+      
+      if (result.success) {
+        showAlert('success', `PDF guardado correctamente`);
       } else {
-        throw new Error('Error al guardar PDF');
+        throw new Error(result.error || 'Error desconocido');
       }
-    } catch (error) {
-      console.error('Error al exportar PDF:', error);
-      showAlert('error', 'Error al exportar la factura como PDF');
-    }
-  };
-
-  // Imprimir factura
-  const handlePrint = async () => {
-    if (!state.selectedInvoice) {
-      showAlert('warning', 'No hay factura seleccionada para imprimir');
-      return;
-    }
-    try {
-      if (!facturaRef.current) {
-        throw new Error('Referencia de factura no disponible');
-      }
-      setIsSubmitting(true);
-      const htmlContent = facturaRef.current.outerHTML;
-      const mgr = InvoiceManager.getInstance();
-      await mgr.printInvoice(
-        state.selectedInvoice,
-        htmlContent,
-        { silent: true, copies: 1 }
-      );
-      showAlert('success', 'Factura impresa correctamente');
-    } catch (error) {
-      console.error('Error al imprimir factura:', error);
-      showAlert('error', `Error al imprimir: ${error instanceof Error ? error.message : 'Error desconocido'}`);
+    } catch (err) {
+      console.error(err);
+      showAlert('error', `Error al guardar PDF: ${(err as Error).message}`);
     } finally {
       setIsSubmitting(false);
     }
@@ -350,35 +669,23 @@ const Factura: React.FC = () => {
   // Abrir carpeta de PDFs
   const handleOpenPdfFolder = async () => {
     try {
-      const api = window.api;
-      
-      if (!settings?.ruta_pdf) {
-        showAlert('warning', 'No hay una ruta configurada para las facturas');
+      const pdfPath = settings?.ruta_pdf;
+      if (!pdfPath) {
+        showAlert('warning', 'No hay ruta configurada para las facturas PDF');
         return;
       }
 
-      if (!api) {
+      if (!window.api?.ensureDir || !window.api?.openFolder) {
         throw new Error("API no disponible");
       }
-      
-      // Definir ruta de facturas
-      const facturaPath = settings.ruta_pdf;
 
-      // Asegurar que la carpeta existe antes de intentar abrirla
-      if (api.ensureDir) {
-        const dirResult = await api.ensureDir(facturaPath);
-        if (!dirResult.success) {
-          throw new Error(`No se pudo crear la carpeta: ${dirResult.error}`);
-        }
+      const dirResult = await window.api.ensureDir(pdfPath);
+      if (!dirResult.success) {
+        throw new Error(`No se pudo crear la carpeta: ${dirResult.error}`);
       }
 
-      // Abrir la carpeta
-      if (api.openFolder) {
-        await api.openFolder(facturaPath);
-        showAlert('success', 'Carpeta de facturas abierta correctamente');
-      } else {
-        showAlert('info', `Ruta de facturas: ${facturaPath}`);
-      }
+      await window.api.openFolder(pdfPath);
+      showAlert('success', 'Carpeta de facturas abierta correctamente');
     } catch (error) {
       console.error('Error al abrir carpeta:', error);
       showAlert('error', `No se pudo abrir la carpeta: ${error instanceof Error ? error.message : 'Error desconocido'}`);
@@ -405,11 +712,7 @@ const Factura: React.FC = () => {
   // Mostrar alerta
   const showAlert = (type: AlertType, message: string) => {
     setAlert({ type, message });
-    
-    // Auto-cerrar después de 5 segundos
-    setTimeout(() => {
-      setAlert(null);
-    }, 5000);
+    setTimeout(() => setAlert(null), 5000);
   };
 
   // Mostrar diálogo de confirmación
@@ -439,11 +742,9 @@ const Factura: React.FC = () => {
           if (result.success) {
             showAlert('success', 'Factura anulada correctamente');
             
-            // Si estamos viendo la factura, actualizarla
             if (state.selectedInvoice && state.selectedInvoice.id === id) {
               handleViewInvoice(id);
             } else {
-              // Sino, refrescar la lista
               fetchInvoices();
             }
           } else {
@@ -479,22 +780,19 @@ const Factura: React.FC = () => {
   // Formatear moneda
   const formatCurrency = (amount: number) => {
     try {
-      // Extract proper currency code
-      let currencyCode = 'DOP'; // Default to Dominican Peso
+      let currencyCode = 'DOP';
       
       if (settings?.moneda) {
-        // Handle common currency symbols
         const currencyMap: Record<string, string> = {
-          'RD$': 'DOP', // Dominican Peso
-          '$': 'USD',   // US Dollar
-          '€': 'EUR',   // Euro
-          '£': 'GBP'    // British Pound
+          'RD$': 'DOP',
+          '$': 'USD',
+          '€': 'EUR',
+          '£': 'GBP'
         };
         
         if (currencyMap[settings.moneda]) {
           currencyCode = currencyMap[settings.moneda];
         } else if (settings.moneda.length === 3) {
-          // If it's already a 3-letter code, use it directly
           currencyCode = settings.moneda;
         }
       }
@@ -505,7 +803,6 @@ const Factura: React.FC = () => {
         minimumFractionDigits: 2
       }).format(amount);
     } catch (error) {
-      // Fallback formatting if Intl.NumberFormat fails
       console.warn('Error formatting currency:', error);
       return `${settings?.moneda || 'RD$'} ${amount.toFixed(2)}`;
     }
@@ -531,21 +828,15 @@ const Factura: React.FC = () => {
             Anterior
           </button>
           
-          {/* Mostrar números de página */}
           {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
-            // Lógica para mostrar páginas actuales y cercanas
             let pageToShow;
             if (totalPages <= 5) {
-              // Si hay 5 o menos páginas, mostrar todas
               pageToShow = i + 1;
             } else if (state.currentPage <= 3) {
-              // Si estamos en las primeras páginas
               pageToShow = i + 1;
             } else if (state.currentPage >= totalPages - 2) {
-              // Si estamos en las últimas páginas
               pageToShow = totalPages - 4 + i;
             } else {
-              // Si estamos en medio
               pageToShow = state.currentPage - 2 + i;
             }
             
@@ -594,6 +885,8 @@ const Factura: React.FC = () => {
       </div>
     );
   };
+
+
 
   // Renderizar la UI para la lista de facturas
   const renderInvoicesList = () => {
@@ -700,13 +993,6 @@ const Factura: React.FC = () => {
                     >
                       <Eye className="h-5 w-5" />
                     </button>
-                    <button
-                      onClick={() => handlePrint()}
-                      className="text-gray-600 hover:text-gray-900"
-                      title="Imprimir factura"
-                    >
-                      <Printer className="h-5 w-5" />
-                    </button>
                     {invoice.estado !== 'Anulada' && (
                       <button
                         onClick={() => handleCancelInvoice(invoice.id!)}
@@ -728,7 +1014,8 @@ const Factura: React.FC = () => {
     );
   };
 
-  // Renderizado condicional basado en el estado
+
+  // Renderizado principal
   return (
     <div className="min-h-full bg-gray-50 flex flex-col">
       {/* Alerta flotante */}
@@ -741,42 +1028,106 @@ const Factura: React.FC = () => {
       {/* Encabezado */}
       <header className="flex justify-between items-center px-8 py-4 shadow-md bg-white rounded-lg mb-6">
         <div className="flex items-center gap-3">
-          <button onClick={state.previewMode ? handleBackToList : handleGoBack} className="p-2 rounded-full hover:bg-gray-100 transition-colors">
+          <button 
+            onClick={state.previewMode ? handleBackToList : handleGoBack} 
+            className="p-2 rounded-full hover:bg-gray-100 transition-colors"
+          >
             <ChevronLeft className="h-5 w-5 text-gray-700" />
           </button>
           <div className="flex items-center gap-2">
             <FileText className="h-6 w-6 text-blue-600" />
             <h1 className="text-2xl font-bold text-gray-800">
-              {state.selectedInvoice ? `Factura #${state.selectedInvoice.id}` : 'Facturas'}
+              {state.selectedInvoice ? `Factura #${state.selectedInvoice.id}` : 'Gestión de Facturas e Impresión'}
             </h1>
           </div>
         </div>
         
-        {state.selectedInvoice && (
-          <div className="flex gap-2">
+        {state.selectedInvoice ? (
+          <div className="flex items-center gap-2">
+            {/* Selector de impresora rápido */}
+            <select
+              value={selectedPrinter}
+              onChange={(e) => setSelectedPrinter(e.target.value)}
+              className="py-2 px-3 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500 text-sm"
+              disabled={isSubmitting}
+            >
+              <option value="">Seleccionar impresora...</option>
+              {printers.map(printer => (
+                <option key={printer.name} value={printer.name}>
+                  {printer.name} {printer.isDefault ? '(Por defecto)' : ''}
+                </option>
+              ))}
+            </select>
+
+            <button
+              onClick={handlePrintInvoice}
+              disabled={isSubmitting || !selectedPrinter}
+              className="flex items-center gap-2 py-2 px-4 rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:bg-blue-300 transition-colors"
+            >
+              <Printer className="h-4 w-4" />
+              <span>{isSubmitting ? 'Imprimiendo...' : 'Imprimir'}</span>
+            </button>
+
+            {settings?.guardar_pdf && (
+              <button
+                onClick={handleSavePDF}
+                disabled={isSubmitting}
+                className="flex items-center gap-2 py-2 px-4 rounded-lg bg-green-600 text-white hover:bg-green-700 disabled:bg-green-300 transition-colors"
+              >
+                <Download className="h-4 w-4" />
+                <span>Guardar PDF</span>
+              </button>
+            )}
+
             {settings?.ruta_pdf && (
               <button
                 onClick={handleOpenPdfFolder}
                 className="flex items-center gap-2 py-2 px-4 rounded-lg bg-gray-600 text-white hover:bg-gray-700 transition-colors"
               >
                 <Folder className="h-4 w-4" />
-                <span className="hidden sm:inline">Ver Carpeta</span>
+                <span>Ver PDFs</span>
               </button>
             )}
+          </div>
+        ) : (
+          <div className="flex items-center gap-2">
+            {/* Indicador de estado de impresora */}
+            <div className="flex items-center gap-2">
+              <Printer className="h-4 w-4 text-gray-600" />
+              <select
+                value={selectedPrinter}
+                onChange={(e) => setSelectedPrinter(e.target.value)}
+                className="py-1 px-2 border border-gray-300 rounded text-sm focus:ring-blue-500 focus:border-blue-500"
+                disabled={loadingPrinters}
+              >
+                <option value="">
+                  {loadingPrinters ? 'Cargando...' : 'Seleccionar impresora...'}
+                </option>
+                {printers.map(printer => (
+                  <option key={printer.name} value={printer.name}>
+                    {printer.name} {printer.isDefault ? '(Por defecto)' : ''}
+                  </option>
+                ))}
+              </select>
+            </div>
+
             <button
-              onClick={handleExportPDF}
-              className="flex items-center gap-2 py-2 px-4 rounded-lg bg-blue-50 text-blue-700 hover:bg-blue-100 transition-colors"
+              onClick={handleTestPrinter}
+              disabled={!selectedPrinter || isSubmitting}
+              className="py-1 px-2 text-xs rounded bg-gray-100 hover:bg-gray-200 text-gray-700 flex items-center gap-1"
+              title="Probar impresora"
             >
-              <Download className="h-4 w-4" />
-              <span className="hidden sm:inline">Exportar PDF</span>
+              <Settings className="h-3 w-3" />
+              <span>Probar</span>
             </button>
-            <button
-              onClick={handlePrint}
-              className="flex items-center gap-2 py-2 px-4 rounded-lg bg-blue-600 text-white hover:bg-blue-700 transition-colors"
-            >
-              <Printer className="h-4 w-4" />
-              <span className="hidden sm:inline">Imprimir</span>
-            </button>
+
+            <div className={`flex items-center gap-1 py-1 px-2 rounded-full text-xs
+              ${selectedPrinter && printers.length > 0
+                ? 'bg-green-50 text-green-700 border border-green-200'
+                : 'bg-yellow-50 text-yellow-700 border border-yellow-200'}`}>
+              <div className={`w-2 h-2 rounded-full ${selectedPrinter && printers.length > 0 ? 'bg-green-500' : 'bg-yellow-500'}`}></div>
+              <span>{selectedPrinter ? 'Listo' : 'Sin impresora'}</span>
+            </div>
           </div>
         )}
       </header>
@@ -784,15 +1135,18 @@ const Factura: React.FC = () => {
       {/* Contenido principal */}
       <main className="flex-1 px-6 pb-8">
         {state.selectedInvoice ? (
+          // Vista de factura individual
           <div className="max-w-4xl mx-auto">
             <div className="bg-white p-8 rounded-xl shadow-sm" ref={facturaRef}>
               <FacturaViewer ventaData={state.selectedInvoice} />
             </div>
           </div>
         ) : (
-          <div className="max-w-6xl mx-auto">
+          // Vista principal con facturas y productos
+          <div className="max-w-7xl mx-auto space-y-6">
+
             {/* Panel de búsqueda y filtros */}
-            <div className="bg-white p-6 rounded-xl shadow-sm mb-6">
+            <div className="bg-white p-6 rounded-xl shadow-sm">
               <div className="flex flex-col lg:flex-row lg:items-end gap-4">
                 <div className="flex-1">
                   <h2 className="text-lg font-medium text-gray-800 mb-3">Buscar factura</h2>
@@ -926,6 +1280,7 @@ const Factura: React.FC = () => {
           </div>
         )}
       </main>
+
       
       {/* Diálogo de confirmación */}
       <ConfirmDialog 

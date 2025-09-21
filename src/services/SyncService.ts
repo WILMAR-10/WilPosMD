@@ -3,8 +3,12 @@ import { useEffect } from 'react';
 
 // Define sync event types
 export type SyncEventType = 
+  'product:create' |
+  'product:created' |
   'product:update' | 
-  'product:delete' | 
+  'product:updated' |
+  'product:delete' |
+  'product:deleted' |
   'sale:create' | 
   'inventory:update' |
   'category:update' |

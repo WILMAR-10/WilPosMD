@@ -1,5 +1,5 @@
 ﻿// Inventario.tsx
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useAuth } from '../services/AuthContext';
 import ConfirmDialog from '../components/ConfirmDialog';
 import { useProducts, useCategories, Product, Category } from '../services/DatabaseService';
@@ -7,9 +7,11 @@ import {
   Search, Pencil, Trash2, Plus, Package, BarChart4,
   AlertCircle, ArrowUpDown, RotateCcw, X, AlertTriangle,
   Check, Loader, Barcode, QrCode, Printer, ChevronLeft, Filter, SlidersHorizontal,
-  ShieldCheck
+  ShieldCheck, Settings
 } from 'lucide-react';
-import { useSyncListener, broadcastSyncEvent } from '../services/SyncService';
+import { useOptimizedProductSync, useOptimizedInventorySync } from '../hooks/useOptimizedSync';
+import { broadcastSyncEvent } from '../services/SyncService';
+import SmoothUpdateIndicator from '../components/SmoothUpdateIndicator';
 
 // Tipo para alerta
 type AlertType = 'success' | 'warning' | 'error' | 'info';
@@ -18,6 +20,116 @@ const Inventario = () => {
   // const { user, hasPermission } = useAuth();
   const { products, loading, error: productsError, fetchProducts, addProduct, updateProduct, deleteProduct } = useProducts();
   const { categories, loading: loadingCategories, fetchCategories, addCategory, updateCategory, deleteCategory } = useCategories();
+  
+  // Crear estado local de productos para optimizar actualizaciones
+  const [localProducts, setLocalProducts] = useState(products);
+  
+  // Sincronización entre múltiples ventanas de inventario y ventas
+  useEffect(() => {
+    if (!window.api?.registerSyncListener) return;
+
+    const handleSyncEvent = (event: any) => {
+      const syncEvent = event.detail || event;
+      
+      // 1. Escuchar actualizaciones de stock desde otras ventanas de inventario
+      if (syncEvent.type === 'inventory:stock-updated') {
+        const { productId, newStock, productData } = syncEvent.data;
+        
+        console.log('🔄 Received stock update from another window:', productId, newStock);
+        
+        // Actualizar solo el producto específico de forma suave
+        setLocalProducts(prev => prev.map(product => {
+          if (product.id === productId && product.stock !== newStock) {
+            const stockChange = newStock - (product.stock || 0);
+            return {
+              ...product,
+              stock: newStock,
+              _stockUpdated: true,
+              _stockChange: stockChange,
+              _stockAnimation: stockChange > 0 ? 'increase' : stockChange < 0 ? 'decrease' : 'neutral',
+              _updateTimestamp: Date.now(),
+              _isRemoteUpdate: true // Flag para distinguir updates remotos
+            };
+          }
+          return product;
+        }));
+
+        // Limpiar flags después de animación
+        setTimeout(() => {
+          setLocalProducts(prev => prev.map(product => 
+            product.id === productId
+              ? { 
+                  ...product, 
+                  _stockUpdated: false, 
+                  _stockChange: undefined,
+                  _stockAnimation: undefined,
+                  _isRemoteUpdate: false
+                }
+              : product
+          ));
+        }, 2500);
+      }
+      
+      // 2. Escuchar ventas desde la caja para actualizar stock
+      if (syncEvent.type === 'sale' && syncEvent.data.action === 'create' && syncEvent.data.data.products) {
+        console.log('🛒 Received sale from Caja - updating inventory:', syncEvent.data.data.products);
+        
+        // Actualizar stock para cada producto vendido
+        syncEvent.data.data.products.forEach((saleItem: {id: number, quantity: number}) => {
+          setLocalProducts(prev => prev.map(product => {
+            if (product.id === saleItem.id) {
+              const oldStock = Number(product.stock) || 0;
+              const newStock = Math.max(0, oldStock - saleItem.quantity);
+              const stockChange = newStock - oldStock;
+              
+              return {
+                ...product,
+                stock: newStock,
+                _stockUpdated: true,
+                _stockChange: stockChange,
+                _stockAnimation: 'decrease',
+                _updateTimestamp: Date.now(),
+                _isRemoteUpdate: true
+              };
+            }
+            return product;
+          }));
+        });
+        
+        // Limpiar flags después de animación
+        setTimeout(() => {
+          setLocalProducts(prev => prev.map(product => {
+            const wasUpdated = syncEvent.data.data.products.some((item: any) => item.id === product.id);
+            return wasUpdated
+              ? { 
+                  ...product, 
+                  _stockUpdated: false, 
+                  _stockChange: undefined,
+                  _stockAnimation: undefined,
+                  _isRemoteUpdate: false
+                }
+              : product;
+          }));
+        }, 2500);
+      }
+    };
+
+    // Registrar listener para eventos de sync
+    window.addEventListener('sync-event', handleSyncEvent as EventListener);
+    window.api.registerSyncListener();
+
+    return () => {
+      window.removeEventListener('sync-event', handleSyncEvent as EventListener);
+      if (window.api?.unregisterSyncListener) {
+        window.api.unregisterSyncListener();
+      }
+    };
+  }, []);
+  
+  // Sincronizar productos cuando cambien desde el hook de database
+  useEffect(() => {
+    setLocalProducts(products);
+  }, [products]);
 
   // Estados locales
   const [searchTerm, setSearchTerm] = useState('');
@@ -145,7 +257,8 @@ const Inventario = () => {
 
   // Filtrar y ordenar productos
   const filteredProducts = useMemo(() => {
-    let result = [...products];
+    // Filtro básico - solo productos que existen
+    let result = localProducts.filter(product => product && product.id);
 
     // Filtrar por término de búsqueda
     if (searchTerm) {
@@ -194,21 +307,21 @@ const Inventario = () => {
     });
 
     return result;
-  }, [products, searchTerm, filterCategory, showLowStock, sortField, sortDirection]);
+  }, [localProducts, searchTerm, filterCategory, showLowStock, sortField, sortDirection]);
 
   // Estadísticas del inventario
   const stats = useMemo(() => {
     if (loading) return { total: 0, lowStock: 0, value: 0 };
 
-    const lowStockCount = products.filter(p => p.stock <= (p.stock_minimo || 5)).length;
-    const totalValue = products.reduce((sum, p) => sum + (p.stock * p.costo), 0);
+    const lowStockCount = localProducts.filter(p => p.stock <= (p.stock_minimo || 5)).length;
+    const totalValue = localProducts.reduce((sum, p) => sum + (p.stock * p.costo), 0);
 
     return {
-      total: products.length,
+      total: localProducts.length,
       lowStock: lowStockCount,
       value: totalValue
     };
-  }, [products, loading]);
+  }, [localProducts, loading]);
 
   // Manejar cambios en el formulario
   const handleFormChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
@@ -293,7 +406,7 @@ const Inventario = () => {
     if (!barcodeInput.trim()) return;
 
     // Asegurarse de que código de barras se maneje como string
-    const foundProduct = products.find((p) => p.codigo_barra === barcodeInput.trim());
+    const foundProduct = localProducts.find((p) => p.codigo_barra === barcodeInput.trim());
 
     if (foundProduct) {
       handleEditProduct(foundProduct);
@@ -380,7 +493,9 @@ const Inventario = () => {
 
       // Broadcast the change
       if (result) {
-        broadcastSyncEvent('product:update', { 
+        const eventType = sidePanel === 'add' ? 'product:created' : 'product:updated';
+        broadcastSyncEvent(eventType, { 
+          id: result.id,
           productId: result.id, 
           product: result 
         });
@@ -403,21 +518,78 @@ const Inventario = () => {
     }
   };
 
-  // Actualizar Stock
+  // Actualizar Stock - versión simple y segura
   const handleUpdateStock = async (productId: number | undefined, newStock: number) => {
-    if (!productId || newStock < 0) return;
+    if (!productId || newStock < 0 || actionLoading) return;
 
     try {
-      const productToUpdate = products.find(p => p.id === productId);
-      if (!productToUpdate) return;
+      setActionLoading(true);
+      const productToUpdate = localProducts.find(p => p.id === productId);
+      if (!productToUpdate) {
+        console.error('Product not found for stock update:', productId);
+        return;
+      }
 
-      await updateProduct(productId, { ...productToUpdate, stock: newStock });
+      console.log('🔄 Updating stock for product:', { id: productId, currentStock: productToUpdate.stock, newStock });
+
+      // 1. Actualización inmediata local (sin _isRemoteUpdate para evitar icono 🔄)
+      setLocalProducts(prev => prev.map(product => {
+        if (product.id === productId) {
+          const stockChange = newStock - (product.stock || 0);
+          return { 
+            ...product, 
+            stock: newStock,
+            _stockUpdated: true,
+            _stockChange: stockChange,
+            _stockAnimation: stockChange > 0 ? 'increase' : stockChange < 0 ? 'decrease' : 'neutral',
+            _updateTimestamp: Date.now()
+            // NO _isRemoteUpdate porque es una actualización local
+          };
+        }
+        return product;
+      }));
+
+      // 2. Actualizar en base de datos
+      await updateProduct(productId, { stock: newStock });
+      
+      // 3. Refrescar desde DB pero sin mostrar animaciones (ya las mostramos)
       await fetchProducts();
+      
+      // 4. Limpiar flags después de animación
+      setTimeout(() => {
+        setLocalProducts(prev => prev.map(product => 
+          product.id === productId
+            ? { 
+                ...product, 
+                _stockUpdated: false, 
+                _stockChange: undefined,
+                _stockAnimation: undefined 
+              }
+            : product
+        ));
+      }, 2000);
+      
+      // Emitir evento de sincronización para otras ventanas
+      if (window.api?.broadcastSyncEvent) {
+        window.api.broadcastSyncEvent({
+          type: 'inventory:stock-updated',
+          data: {
+            productId,
+            newStock,
+            productData: { ...productToUpdate, stock: newStock }
+          },
+          timestamp: Date.now()
+        });
+      }
+
     } catch (err) {
+      console.error('Error updating stock:', err);
       setAlert({
         type: 'error',
         message: `Error al actualizar stock: ${err instanceof Error ? err.message : 'Error desconocido'}`
       });
+    } finally {
+      setActionLoading(false);
     }
   };
 
@@ -560,6 +732,11 @@ const Inventario = () => {
   };
 
   // Efecto para cerrar la alerta después de un tiempo
+  // Load printers on mount
+  useEffect(() => {
+    loadPrinters();
+  }, []);
+
   useEffect(() => {
     if (alert) {
       const timer = setTimeout(() => {
@@ -570,19 +747,344 @@ const Inventario = () => {
     }
   }, [alert]);
 
-  // this hook listen for relevant sync events
-  useSyncListener(['product:update', 'product:delete', 'sale:create', 'inventory:update'], (event) => {
-    console.log('Received sync event in Inventario:', event);
-    
-    // For all event types, simply fetch products to refresh the data
-    if (event.type === 'sale:create' || 
-        event.type === 'product:update' || 
-        event.type === 'product:delete' || 
-        (event.type === 'inventory:update' && event.data?.productId)) {
-      // Refresh all products data instead of trying to update individual products
-      fetchProducts();
+  // Load available printers
+  const loadPrinters = async () => {
+    try {
+      setLoadingPrinters(true);
+      const result = await window.printApi?.getPrinters();
+      
+      if (result?.success) {
+        setPrinters(result.printers || []);
+        
+        // Set default printer
+        const defaultPrinter = result.printers?.find((p: any) => p.isDefault);
+        if (defaultPrinter) {
+          setSelectedPrinter(defaultPrinter.name);
+        }
+      }
+    } catch (error) {
+      console.error('Error loading printers:', error);
+    } finally {
+      setLoadingPrinters(false);
     }
-  });
+  };
+
+  // Test printer function
+  const handleTestPrinter = async () => {
+    if (!selectedPrinter) {
+      setAlert({ type: 'warning', message: 'Por favor selecciona una impresora' });
+      return;
+    }
+
+    setIsSubmitting(true);
+    
+    try {
+      const result = await window.printApi?.testPrinter(selectedPrinter);
+      
+      if (result?.success) {
+        setAlert({ type: 'success', message: 'Prueba de impresora enviada correctamente' });
+      } else {
+        throw new Error(result?.error || 'Error desconocido');
+      }
+    } catch (err) {
+      console.error(err);
+      setAlert({ type: 'error', message: `Error al probar impresora: ${(err as Error).message}` });
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  // Generate product label HTML
+  const generateProductLabelHTML = (product: Product): string => {
+    const currency = 'RD$'; // You can get this from settings if available
+    
+    return `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="UTF-8">
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/jsbarcode/3.11.5/JsBarcode.all.min.js"></script>
+        <style>
+          * { margin: 0; padding: 0; box-sizing: border-box; }
+          body { 
+            font-family: Arial, sans-serif; 
+            padding: 8px; 
+            margin: 0;
+            background: white;
+            width: 62mm;
+            height: 40mm;
+          }
+          .label {
+            border: 2px solid #000;
+            padding: 6px;
+            text-align: center;
+            height: 36mm;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+          }
+          .product-name {
+            font-size: 10px;
+            font-weight: bold;
+            margin-bottom: 2px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            line-height: 1.2;
+          }
+          .barcode-container {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 2px 0;
+          }
+          .barcode {
+            max-width: 100%;
+            max-height: 100%;
+          }
+          .product-info {
+            font-size: 8px;
+            color: #333;
+          }
+          .product-code {
+            font-size: 8px;
+            margin: 1px 0;
+            color: #666;
+          }
+          .product-price {
+            font-size: 12px;
+            font-weight: bold;
+            color: #d00;
+            margin-top: 2px;
+          }
+        </style>
+      </head>
+      <body>
+        <div class="label">
+          <div class="product-name" title="${product.nombre}">${product.nombre}</div>
+          
+          ${product.codigo_barra ? `
+            <div class="barcode-container">
+              <canvas id="barcode" class="barcode"></canvas>
+            </div>
+            <div class="product-code">${product.codigo_barra}</div>
+          ` : ''}
+          
+          <div class="product-price">${currency} ${product.precio_venta.toFixed(2)}</div>
+          <div class="product-info">Stock: ${product.stock}</div>
+        </div>
+
+        ${product.codigo_barra ? `
+          <script>
+            try {
+              JsBarcode("#barcode", "${product.codigo_barra}", {
+                format: "CODE128",
+                width: 1,
+                height: 30,
+                displayValue: false,
+                margin: 0,
+                fontSize: 8
+              });
+            } catch(e) {
+              console.error('Error generating barcode:', e);
+              document.getElementById('barcode').style.display = 'none';
+            }
+          </script>
+        ` : ''}
+      </body>
+      </html>
+    `;
+  };
+
+  // Generate custom barcode HTML
+  const generateCustomBarcodeHTML = (text: string): string => {
+    return `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="UTF-8">
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/jsbarcode/3.11.5/JsBarcode.all.min.js"></script>
+        <style>
+          * { margin: 0; padding: 0; box-sizing: border-box; }
+          body { 
+            font-family: Arial, sans-serif; 
+            margin: 0;
+            padding: 10px;
+            background: white;
+            text-align: center;
+          }
+          .barcode-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100px;
+          }
+          .barcode {
+            margin: 10px 0;
+          }
+          .barcode-text {
+            margin-top: 10px;
+            font-size: 14px;
+            font-weight: bold;
+            color: #333;
+          }
+        </style>
+      </head>
+      <body>
+        <div class="barcode-container">
+          <canvas id="barcode" class="barcode"></canvas>
+          <div class="barcode-text">${text}</div>
+        </div>
+
+        <script>
+          try {
+            JsBarcode("#barcode", "${text}", {
+              format: "CODE128",
+              width: 2,
+              height: 100,
+              displayValue: true,
+              fontSize: 14,
+              margin: 10
+            });
+          } catch(e) {
+            console.error('Error generating barcode:', e);
+            document.body.innerHTML = '<p>Error al generar código de barras</p>';
+          }
+        </script>
+      </body>
+      </html>
+    `;
+  };
+
+  // Generate custom QR code HTML
+  const generateCustomQRHTML = (text: string): string => {
+    return `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="UTF-8">
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode/1.5.3/qrcode.min.js"></script>
+        <style>
+          * { margin: 0; padding: 0; box-sizing: border-box; }
+          body { 
+            font-family: Arial, sans-serif; 
+            margin: 0;
+            padding: 10px;
+            background: white;
+            text-align: center;
+          }
+          .qr-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 200px;
+          }
+          .qr-code {
+            margin: 10px 0;
+          }
+          .qr-text {
+            margin-top: 10px;
+            font-size: 12px;
+            word-break: break-all;
+            max-width: 200px;
+            color: #333;
+          }
+        </style>
+      </head>
+      <body>
+        <div class="qr-container">
+          <canvas id="qrcode" class="qr-code"></canvas>
+          <div class="qr-text">${text}</div>
+        </div>
+
+        <script>
+          try {
+            QRCode.toCanvas(document.getElementById('qrcode'), "${text}", {
+              width: 200,
+              margin: 2,
+              color: {
+                dark: '#000000',
+                light: '#FFFFFF'
+              }
+            }, function (error) {
+              if (error) {
+                console.error(error);
+                document.body.innerHTML = '<p>Error al generar código QR</p>';
+              }
+            });
+          } catch(e) {
+            console.error('Error generating QR code:', e);
+            document.body.innerHTML = '<p>Error al generar código QR</p>';
+          }
+        </script>
+      </body>
+      </html>
+    `;
+  };
+
+  // Print functions
+  const handlePrint = async () => {
+    if (!selectedPrinter) {
+      setAlert({ type: 'warning', message: 'Por favor selecciona una impresora' });
+      return;
+    }
+
+    setIsSubmitting(true);
+    
+    try {
+      let html = '';
+      let result;
+
+      switch (printPanel.type) {
+        case 'label':
+          if (!printPanel.product) throw new Error('No hay producto seleccionado');
+          html = generateProductLabelHTML(printPanel.product);
+          result = await window.printApi?.printEtiqueta(html, selectedPrinter);
+          break;
+        
+        case 'custom-barcode':
+          if (!customBarcodeText.trim()) {
+            setAlert({ type: 'warning', message: 'Por favor ingresa texto para el código de barras' });
+            return;
+          }
+          html = generateCustomBarcodeHTML(customBarcodeText);
+          result = await window.printApi?.printBarcode(html, selectedPrinter);
+          break;
+        
+        case 'custom-qr':
+          if (!customQRText.trim()) {
+            setAlert({ type: 'warning', message: 'Por favor ingresa texto para el código QR' });
+            return;
+          }
+          html = generateCustomQRHTML(customQRText);
+          result = await window.printApi?.printQR(html, selectedPrinter);
+          break;
+        
+        default:
+          throw new Error('Tipo de impresión no válido');
+      }
+      
+      if (result?.success) {
+        setAlert({ type: 'success', message: 'Impreso correctamente' });
+        // Close panel and reset
+        setPrintPanel({ isOpen: false, product: null, type: 'label' });
+        setCustomBarcodeText('');
+        setCustomQRText('');
+      } else {
+        throw new Error(result?.error || 'Error desconocido');
+      }
+    } catch (err) {
+      console.error(err);
+      setAlert({ type: 'error', message: `Error al imprimir: ${(err as Error).message}` });
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  // Eliminado: Sistema de notificaciones problemático que causaba mensajes incorrectos
 
   // Componentes reutilizables
   interface StatCardProps {
@@ -649,12 +1151,24 @@ const Inventario = () => {
     );
   };
 
-  // Add state for print panel
-  const [printPanel, setPrintPanel] = useState<{ isOpen: boolean; product: Product | null }>({
+  // Enhanced state for print panel with barcode/QR functionality
+  const [printPanel, setPrintPanel] = useState<{ 
+    isOpen: boolean; 
+    product: Product | null;
+    type: 'label' | 'barcode' | 'qr' | 'custom-barcode' | 'custom-qr';
+  }>({
     isOpen: false,
-    product: null
+    product: null,
+    type: 'label'
   });
   const [printQuantity, setPrintQuantity] = useState<number>(1);
+  const [customBarcodeText, setCustomBarcodeText] = useState('');
+  const [customQRText, setCustomQRText] = useState('');
+  const [printers, setPrinters] = useState<any[]>([]);
+  const [selectedPrinter, setSelectedPrinter] = useState<string>('');
+  const [loadingPrinters, setLoadingPrinters] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [labelSize, setLabelSize] = useState('1.57x1.18');
 
   return (
     <div className="min-h-full bg-gray-50 flex flex-col">
@@ -756,6 +1270,27 @@ const Inventario = () => {
           </div>
         </div>
 
+        {/* Printing Tools Section */}
+        <div className="bg-white p-6 rounded-xl shadow-sm mb-6">
+          <h2 className="text-lg font-semibold text-gray-800 mb-4">Herramientas de Impresión</h2>
+          <div className="flex flex-wrap gap-3">
+            <button
+              onClick={() => setPrintPanel({ isOpen: true, product: null, type: 'custom-barcode' })}
+              className="flex items-center gap-2 py-2 px-4 bg-orange-600 hover:bg-orange-700 text-white rounded-lg transition-colors"
+            >
+              <Barcode className="h-4 w-4" />
+              <span>Código de Barras Personalizado</span>
+            </button>
+            <button
+              onClick={() => setPrintPanel({ isOpen: true, product: null, type: 'custom-qr' })}
+              className="flex items-center gap-2 py-2 px-4 bg-purple-600 hover:bg-purple-700 text-white rounded-lg transition-colors"
+            >
+              <QrCode className="h-4 w-4" />
+              <span>Código QR Personalizado</span>
+            </button>
+          </div>
+        </div>
+
         {/* Filtros y opciones */}
         <div className="flex flex-col sm:flex-row items-center gap-4 mb-6 bg-white p-4 rounded-xl shadow-sm">
           <div className="flex flex-wrap gap-3 w-full">
@@ -766,8 +1301,8 @@ const Inventario = () => {
             >
               <option value="All">Todas las categorías</option>
               {Array.isArray(categories) && categories.length > 0 ? (
-                categories.map((cat) => (
-                  <option key={cat.id} value={cat.nombre}>
+                categories.map((cat, index) => (
+                  <option key={cat.id || `cat-filter-${index}`} value={cat.nombre}>
                     {cat.nombre}
                   </option>
                 ))
@@ -838,7 +1373,7 @@ const Inventario = () => {
           ) : (
             <div className="overflow-x-auto max-h-[calc(100vh-420px)]">
               <table className="min-w-full border-collapse">
-                <thead className="bg-gray-50 sticky top-0">
+                <thead className="bg-gray-50 sticky top-0 z-10">
                   <tr>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                       Imagen
@@ -894,49 +1429,93 @@ const Inventario = () => {
                   </tr>
                 </thead>
                 <tbody className="bg-white divide-y divide-gray-200">
-                  {filteredProducts.map((product) => (
-                    <tr key={product.id} className="hover:bg-gray-50 transition-colors">
+                  {filteredProducts.map((product, index) => (
+                      <tr key={product.id || `product-${index}`} className={`hover:bg-gray-50 transition-colors ${product._isDeleting ? 'animate-fade-out opacity-50' : ''}`}>
                       <td className="px-6 py-4 whitespace-nowrap">
                         <div className="w-12 h-12 bg-blue-100 rounded-lg flex items-center justify-center text-blue-700 font-bold overflow-hidden">
                           {product.imagen ? (
                             <img src={product.imagen} alt={product.nombre} className="h-full w-full object-cover" />
                           ) : (
-                            product.nombre.charAt(0)
+                            (product.nombre || 'N').charAt(0)
                           )}
                         </div>
                       </td>
-                      <td className="px-6 py-4 whitespace-nowrap font-medium text-gray-800">{product.nombre}</td>
+                      <td className="px-6 py-4 whitespace-nowrap font-medium text-gray-800">{product.nombre || 'Sin nombre'}</td>
                       <td className="px-6 py-4 whitespace-nowrap text-gray-600">
                         <span className="px-2 py-1 rounded-full bg-blue-100 text-blue-800 text-xs font-semibold">
                           {product.categoria || "Sin categoría"}
                         </span>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-gray-600 font-medium">
-                        {formatCurrency(product.precio_venta)}
+                        {formatCurrency(Number(product.precio_venta) || 0)}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
                         <div className="flex items-center gap-2">
                           <button
-                            className="flex items-center justify-center h-8 w-8 rounded-md bg-gray-100 hover:bg-gray-200 transition-colors"
-                            onClick={() => handleUpdateStock(product.id, (product.stock || 0) - 1)}
-                            disabled={product.stock <= 0}
+                            className="flex items-center justify-center h-8 w-8 rounded-md bg-gray-100 hover:bg-gray-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                            onClick={() => {
+                              const currentStock = Number(product.stock) || 0;
+                              if (currentStock > 0) handleUpdateStock(product.id, currentStock - 1);
+                            }}
+                            disabled={(Number(product.stock) || 0) <= 0 || actionLoading}
                           >
                             -
                           </button>
-                          <span className={`w-12 text-center font-medium ${(product.stock || 0) <= (product.stock_minimo || 5) ? "text-red-500" : "text-gray-700"}`}>
-                            {product.stock || 0}
-                          </span>
+                          <div className="relative">
+                            <span className={`
+                              w-12 text-center font-medium transition-all duration-500 ease-out block transform
+                              ${(product.stock || 0) <= (product.stock_minimo || 5) ? "text-red-500" : "text-gray-700"}
+                              ${product._stockUpdated ? 'scale-125 font-bold shadow-md' : 'scale-100'}
+                              ${product._stockAnimation === 'increase' ? 'text-green-600 bg-green-50 rounded-md px-2 py-1' : ''}
+                              ${product._stockAnimation === 'decrease' ? 'text-red-600 bg-red-50 rounded-md px-2 py-1' : ''}
+                              ${product._isRemoteUpdate ? 'ring-2 ring-blue-300 ring-opacity-50 bg-blue-50 rounded-md px-2 py-1' : ''}
+                            `}>
+                              {product.stock || 0}
+                            </span>
+                            
+                            {/* Indicador de cambio de stock mejorado */}
+                            {product._stockChange && product._stockUpdated && (
+                              <span className={`
+                                absolute -top-1 -right-1 text-xs font-bold px-2 py-1 rounded-full z-10
+                                transition-all duration-300 ease-out animate-bounce
+                                ${product._stockChange > 0 
+                                  ? 'bg-green-500 text-white shadow-lg shadow-green-200' 
+                                  : 'bg-red-500 text-white shadow-lg shadow-red-200'
+                                }
+                                ${product._isRemoteUpdate ? 'ring-2 ring-blue-400 ring-offset-1' : ''}
+                              `}>
+                                {product._stockChange > 0 ? '+' : ''}{product._stockChange}
+                              </span>
+                            )}
+                            
+                            {/* Indicador de update remoto - solo para ventas o otras ventanas */}
+                            {product._isRemoteUpdate && (
+                              <span className="absolute -top-2 -left-2 text-xs bg-blue-500 text-white px-2 py-1 rounded-full animate-pulse">
+                                🔄
+                              </span>
+                            )}
+                          </div>
                           <button
-                            className="flex items-center justify-center h-8 w-8 rounded-md bg-gray-100 hover:bg-gray-200 transition-colors"
-                            onClick={() => handleUpdateStock(product.id, (product.stock || 0) + 1)}
+                            className="flex items-center justify-center h-8 w-8 rounded-md bg-gray-100 hover:bg-gray-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                            onClick={() => {
+                              const currentStock = Number(product.stock) || 0;
+                              handleUpdateStock(product.id, currentStock + 1);
+                            }}
+                            disabled={actionLoading}
                           >
                             +
                           </button>
                         </div>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
-                        <span className={`font-medium ${((product.precio_venta - product.costo) / product.costo) * 100 > 20 ? "text-green-600" : "text-red-600"}`}>
-                          {(((product.precio_venta - product.costo) / product.costo) * 100).toFixed(2)}%
+                        <span className={`font-medium ${
+                          ((Number(product.precio_venta) || 0) - (Number(product.costo) || 0)) / (Number(product.costo) || 1) * 100 > 20 
+                            ? "text-green-600" : "text-red-600"
+                        }`}>
+                          {(Number(product.precio_venta) > 0 && Number(product.costo) > 0) 
+                            ? (((Number(product.precio_venta) - Number(product.costo)) / Number(product.costo)) * 100).toFixed(2)
+                            : '0.00'
+                          }%
                         </span>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
@@ -946,7 +1525,7 @@ const Inventario = () => {
                             Exento
                           </span>
                         ) : (
-                          <span>{(product.itebis * 100).toFixed(0)}%</span>
+                          <span>{((Number(product.itebis) || 0) * 100).toFixed(0)}%</span>
                         )}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-gray-600">
@@ -967,7 +1546,7 @@ const Inventario = () => {
                           </button>
 
                           <button
-                            onClick={() => setPrintPanel({ isOpen: true, product })}
+                            onClick={() => setPrintPanel({ isOpen: true, product, type: 'label' })}
                             title="Imprimir etiquetas"
                             className="flex items-center gap-1 px-3 py-1 bg-green-50 text-green-600 hover:bg-green-100 rounded-lg transition-colors"
                           >
@@ -985,7 +1564,7 @@ const Inventario = () => {
                           </button>
                         </div>
                       </td>
-                    </tr>
+                      </tr>
                   ))}
                 </tbody>
               </table>
@@ -1167,8 +1746,8 @@ const Inventario = () => {
                     >
                       <option value="">Seleccione una categoría</option>
                       {Array.isArray(categories) && categories.length > 0 ? (
-                        categories.map((cat) => (
-                          <option key={cat.id} value={cat.nombre}>
+                        categories.map((cat, index) => (
+                          <option key={cat.id || `cat-form-${index}`} value={cat.nombre}>
                             {cat.nombre}
                           </option>
                         ))
@@ -1462,42 +2041,95 @@ const Inventario = () => {
         </div>
       )}
 
-      {/* Demo Print Panel */}
+      {/* Enhanced Print Panel with Barcode/QR functionality */}
       {printPanel.isOpen && (
         <div className="fixed inset-0 backdrop-blur-sm z-30 flex justify-end">
           <div
-            onClick={() => setPrintPanel({ isOpen: false, product: null })}
+            onClick={() => setPrintPanel({ isOpen: false, product: null, type: 'label' })}
             className="absolute inset-0"
           />
           <div className="bg-white w-full max-w-md h-[calc(100vh-64px)] mt-16 shadow-xl rounded-l-2xl relative z-10 p-6">
             <div className="flex justify-between items-center mb-4">
               <h2 className="text-xl font-bold">
-                Print Labels – {printPanel.product?.nombre}
+                {printPanel.type === 'label' && printPanel.product && `Etiqueta - ${printPanel.product.nombre}`}
+                {printPanel.type === 'custom-barcode' && 'Código de Barras Personalizado'}
+                {printPanel.type === 'custom-qr' && 'Código QR Personalizado'}
               </h2>
               <button
-                onClick={() => setPrintPanel({ isOpen: false, product: null })}
+                onClick={() => setPrintPanel({ isOpen: false, product: null, type: 'label' })}
                 className="p-2 rounded-full hover:bg-gray-100"
               >
                 <X className="h-5 w-5 text-gray-600" />
               </button>
             </div>
+            
             <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Label Size
-                </label>
-                <select
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md"
-                  defaultValue="1.57x1.18"
-                >
-                  <option value="1.57x1.18">1.57" × 1.18"</option>
-                  <option value="1.96x1.18">1.96" × 1.18"</option>
-                  <option value="1.57x2.76">1.57" × 2.76"</option>
-                  <option value="1.96x1.57">1.96" × 1.57"</option>
-                  <option value="1.96x3.14">1.96" × 3.14"</option>
-                </select>
-              </div>
+              {/* Product information for label printing */}
+              {printPanel.type === 'label' && printPanel.product && (
+                <div className="p-4 bg-gray-50 rounded-lg">
+                  <h4 className="font-medium text-gray-800 mb-2">{printPanel.product.nombre}</h4>
+                  <div className="grid grid-cols-2 gap-2 text-sm text-gray-600">
+                    <div>Código: {printPanel.product.codigo_barra || 'Sin código'}</div>
+                    <div>Precio: {formatCurrency(printPanel.product.precio_venta)}</div>
+                    <div>Stock: {printPanel.product.stock}</div>
+                    <div>Categoría: {printPanel.product.categoria || 'Sin categoría'}</div>
+                  </div>
+                </div>
+              )}
 
+              {/* Custom barcode text input */}
+              {printPanel.type === 'custom-barcode' && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Texto del código de barras:
+                  </label>
+                  <input
+                    type="text"
+                    value={customBarcodeText}
+                    onChange={(e) => setCustomBarcodeText(e.target.value)}
+                    placeholder="Ej: 1234567890123"
+                    className="w-full p-2 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500"
+                  />
+                </div>
+              )}
+
+              {/* Custom QR text input */}
+              {printPanel.type === 'custom-qr' && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Texto o URL:
+                  </label>
+                  <input
+                    type="text"
+                    value={customQRText}
+                    onChange={(e) => setCustomQRText(e.target.value)}
+                    placeholder="Ej: https://miempresa.com o texto libre"
+                    className="w-full p-2 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500"
+                  />
+                </div>
+              )}
+
+              {/* Label size selection (only for product labels) */}
+              {printPanel.type === 'label' && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Tamaño de Etiqueta
+                  </label>
+                  <select
+                    value={labelSize}
+                    onChange={(e) => setLabelSize(e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                  >
+                    <option value="1.57x1.18">1.57" × 1.18" (40mm × 30mm)</option>
+                    <option value="1.96x1.18">1.96" × 1.18" (50mm × 30mm)</option>
+                    <option value="1.57x2.76">1.57" × 2.76" (40mm × 70mm)</option>
+                    <option value="1.96x1.57">1.96" × 1.57" (50mm × 40mm)</option>
+                    <option value="1.96x3.14">1.96" × 3.14" (50mm × 80mm)</option>
+                  </select>
+                </div>
+              )}
+
+              {/* Quantity selection */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">
                   Cantidad
@@ -1505,29 +2137,68 @@ const Inventario = () => {
                 <input
                   type="number"
                   min={1}
+                  max={100}
                   value={printQuantity}
-                  onChange={e => setPrintQuantity(Number(e.target.value) || 1)}
+                  onChange={e => setPrintQuantity(Math.max(1, Number(e.target.value) || 1))}
                   className="w-full px-3 py-2 border border-gray-300 rounded-md"
                 />
               </div>
 
-              <div className="text-center">
-                <div className="inline-block p-4 border border-gray-200 rounded-md">
-                  <Barcode className="h-16 w-16 mx-auto text-gray-700" />
-                  <p className="mt-2 text-xs text-gray-500">Barcode Preview</p>
-                </div>
-                <div className="inline-block p-4 border border-gray-200 rounded-md ml-4">
-                  <QrCode className="h-16 w-16 mx-auto text-gray-700" />
-                  <p className="mt-2 text-xs text-gray-500">QR Code Preview</p>
-                </div>
+              {/* Printer selection */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Impresora:
+                </label>
+                <select
+                  value={selectedPrinter}
+                  onChange={(e) => setSelectedPrinter(e.target.value)}
+                  className="w-full p-2 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500"
+                  disabled={loadingPrinters}
+                >
+                  <option value="">
+                    {loadingPrinters ? 'Cargando...' : 'Seleccionar impresora...'}
+                  </option>
+                  {printers.map(printer => (
+                    <option key={printer.name} value={printer.name}>
+                      {printer.name} {printer.isDefault ? '(Por defecto)' : ''}
+                    </option>
+                  ))}
+                </select>
               </div>
-              <button
-                onClick={() => console.log('Print demo', { product: printPanel.product, quantity: printQuantity })}
-                className="w-full flex items-center justify-center py-2 px-4 rounded-lg bg-blue-600 text-white hover:bg-blue-700 transition-colors"
-              >
-                <Printer className="h-4 w-4 mr-2" />
-                Print Demo
-              </button>
+
+              {/* Preview section */}
+              <div className="text-center p-4 border border-gray-200 rounded-lg bg-gray-50">
+                {printPanel.type === 'label' && <Package className="h-16 w-16 mx-auto text-gray-400 mb-2" />}
+                {printPanel.type === 'custom-barcode' && <Barcode className="h-16 w-16 mx-auto text-gray-400 mb-2" />}
+                {printPanel.type === 'custom-qr' && <QrCode className="h-16 w-16 mx-auto text-gray-400 mb-2" />}
+                <p className="text-sm text-gray-500">Vista previa de impresión</p>
+              </div>
+
+              {/* Action buttons */}
+              <div className="flex gap-2 pt-4">
+                <button
+                  onClick={handleTestPrinter}
+                  disabled={!selectedPrinter || isSubmitting}
+                  className="flex-1 py-2 px-4 bg-gray-600 hover:bg-gray-700 disabled:bg-gray-300 text-white rounded-lg transition-colors flex items-center justify-center gap-2"
+                >
+                  <Settings className="h-4 w-4" />
+                  <span>Probar</span>
+                </button>
+                
+                <button
+                  onClick={handlePrint}
+                  disabled={
+                    !selectedPrinter || 
+                    isSubmitting ||
+                    (printPanel.type === 'custom-barcode' && !customBarcodeText.trim()) ||
+                    (printPanel.type === 'custom-qr' && !customQRText.trim())
+                  }
+                  className="flex-1 py-2 px-4 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-300 text-white rounded-lg transition-colors flex items-center justify-center gap-2"
+                >
+                  <Printer className="h-4 w-4" />
+                  <span>{isSubmitting ? 'Imprimiendo...' : 'Imprimir'}</span>
+                </button>
+              </div>
             </div>
           </div>
         </div>

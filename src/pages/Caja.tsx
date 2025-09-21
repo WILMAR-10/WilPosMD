@@ -1,22 +1,26 @@
-﻿// src/pages/Caja.tsx
+﻿// src/pages/Caja.tsx - Actualizado con hook unificado usePrinter
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import InvoiceManager from '../services/InvoiceManager';
 import {
   ShoppingCart, Search, Package, DollarSign, User,
   Trash2, Plus, Minus, X, CreditCard, Wallet, ChevronLeft,
   Check, AlertTriangle, AlertCircle, Printer, ArrowLeft,
-  Eye, Folder, RotateCcw, Info
+  Eye, Folder, RotateCcw, Info, Barcode, QrCode, FileText,
+  Settings
 } from 'lucide-react';
-import { useProducts, useCategories, useCustomers, useSales, Product } from '../services/DatabaseService';
+import { useProducts, useCategories, useCustomers, useSales, useSettings, Product } from '../services/DatabaseService';
 import { useAuth } from '../services/AuthContext';
+import { usePrinter } from '../hooks/usePrinter'; // Hook unificado
 import ConfirmDialog from '../components/ConfirmDialog';
 import FacturaViewer from '../components/FacturaViewer';
 import Badge from '../components/Badge';
-import { Sale, SaleDetail, SaleResponse, ApiResponse } from '../types/sales';
-import { broadcastSyncEvent } from '../services/SyncService';
+import { Sale, SaleDetail, SaleResponse, PreviewSale } from '../types/sales';
+import { useOptimizedCartSync, useOptimizedProductSync } from '../hooks/useOptimizedSync';
+import { broadcastSyncEvent, useSyncListener } from '../services/SyncService';
+import SmoothUpdateIndicator from '../components/SmoothUpdateIndicator';
 
-// Tipo de método de pago
+// Tipos
 type PaymentMethod = 'Efectivo' | 'Tarjeta' | 'Transferencia';
+type PrintType = 'factura' | 'etiqueta' | 'barcode' | 'qr';
 
 interface Alert {
   id: string;
@@ -25,76 +29,42 @@ interface Alert {
   timestamp: number;
 }
 
-// Tipo para ítem del carrito
 interface CartItem {
   id?: number;
   product_id: number;
   name: string;
-  price: number; // Precio ya incluye ITBIS
-  price_without_tax: number; // Precio sin ITBIS
+  price: number;
+  price_without_tax: number;
   quantity: number;
   subtotal: number;
   itebis: number;
-  is_exempt: boolean; // Indica si el producto está exento de ITBIS
+  is_exempt: boolean;
   discount?: number;
 }
 
-// Tipo para la venta previsualizada
-interface PreviewSale {
-  id?: number;
-  cliente_id: number;
-  cliente: string;
-  total: number;
-  descuento: number;
-  impuestos: number;
-  metodo_pago: PaymentMethod;
-  estado: string;
-  notas?: string;
-  fecha_venta: string;
-  usuario_id?: number;
-  usuario: string;
-  monto_recibido: number;
-  cambio: number;
-  detalles: CartItem[];
-}
-
-// Tipo para configuración de impresora
-interface PrinterSettings {
-  impresora_termica?: string;
-  guardar_pdf?: boolean;
-  ruta_pdf?: string;
-}
-
-interface SaleApiResponse {
-  success: boolean;
-  error?: string;
-  details?: string;
-  message?: string;
-  id?: number;
-  warnings?: string[];
+interface PrintOptions {
+  type: PrintType;
+  printerName?: string;
+  data?: any;
+  openDrawer?: boolean;
+  copies?: number;
 }
 
 const Caja: React.FC = () => {
-  const invoiceManager = InvoiceManager.getInstance();
-
-  const [printerStatus, setPrinterStatus] = useState<{
-    available: boolean;
-    printerName?: string;
-    message?: string;
-  }>({ available: false });
-
   const { user } = useAuth();
   const { products, loading: loadingProducts, fetchProducts } = useProducts();
   const { categories, loading: loadingCategories } = useCategories();
   const { customers, loading: loadingCustomers } = useCustomers();
   const { createSale } = useSales();
+  const { settings } = useSettings();
 
   // Estados locales
   const [cart, setCart] = useState<CartItem[]>([]);
+  const [localProducts, setLocalProducts] = useState(products);
   const [searchTerm, setSearchTerm] = useState('');
   const [barcodeInput, setBarcodeInput] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('all');
-  const [selectedCustomer, setSelectedCustomer] = useState<number>(1); // Cliente genérico por defecto
+  const [selectedCustomer, setSelectedCustomer] = useState<number>(1);
   const [selectedCustomerName, setSelectedCustomerName] = useState<string>('Cliente General');
   const [discount, setDiscount] = useState<number>(0);
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('Efectivo');
@@ -105,9 +75,17 @@ const Caja: React.FC = () => {
   const [previewSale, setPreviewSale] = useState<PreviewSale | null>(null);
   const [printAfterSale, setPrintAfterSale] = useState<boolean>(true);
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
-  const [settings, setSettings] = useState<PrinterSettings>({});
 
-  // Referencia para imprimir
+  // Estados de impresión
+  const [printDialogOpen, setPrintDialogOpen] = useState<boolean>(false);
+  const [selectedPrintType, setSelectedPrintType] = useState<PrintType>('factura');
+  const [customPrintData, setCustomPrintData] = useState({
+    barcodeValue: '',
+    qrValue: '',
+    etiquetaData: {}
+  });
+
+  // Referencia para vista previa
   const facturaRef = useRef<HTMLDivElement>(null);
 
   // Estado para confirmación
@@ -115,45 +93,11 @@ const Caja: React.FC = () => {
     isOpen: false,
     title: '',
     message: '',
-    onConfirm: () => { },
+    onConfirm: () => {},
     type: 'warning' as 'warning' | 'danger' | 'info'
   });
 
-  // Cargar configuración cuando inicia el componente
-  useEffect(() => {
-    const loadSettings = async () => {
-      try {
-        if (window.api?.getSettings) {
-          const appSettings = await window.api.getSettings();
-          console.log("Loaded settings:", appSettings);
-
-          // Verify configured printer
-          if (window.api?.getPrinters) {
-            const printers = await window.api.getPrinters();
-            console.log("Detected printers:", printers.map(p => p.name));
-            console.log("Configured printer:", appSettings.impresora_termica);
-
-            // Check if configured printer exists
-            const printerExists = printers.some(p => p.name === appSettings.impresora_termica);
-            if (appSettings.impresora_termica && !printerExists) {
-              console.warn("⚠️ Configured printer not found among available printers");
-            }
-          }
-
-          setSettings({
-            impresora_termica: appSettings.impresora_termica,
-            guardar_pdf: appSettings.guardar_pdf,
-            ruta_pdf: appSettings.ruta_pdf
-          });
-        }
-      } catch (error) {
-        console.error('Error loading settings:', error);
-      }
-    };
-
-    loadSettings();
-  }, []);
-
+  // Mostrar alerta - DEBE estar definida antes de los hooks que la usan
   const showAlert = (alert: { type: 'success' | 'warning' | 'error' | 'info'; message: string }) => {
     const uniqueId = `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
 
@@ -171,95 +115,99 @@ const Caja: React.FC = () => {
     }, 5000);
   };
 
-  // Verificar estado de la impresora térmica
-  const checkThermalPrinter = async () => {
-    try {
-      if (!window.api?.getPrinters) {
-        setPrinterStatus({ available: false, message: 'API de impresión no disponible' });
-        return;
-      }
-      if (!settings.impresora_termica) {
-        setPrinterStatus({ available: false, message: 'No hay impresora configurada' });
-        return;
-      }
-      const printers = await window.api.getPrinters();
-      const found = printers.find(p => p.name === settings.impresora_termica);
-      if (!found) {
-        setPrinterStatus({ available: false, message: 'Impresora configurada no disponible' });
-        return;
-      }
-      setPrinterStatus({ available: true, printerName: found.name });
-    } catch (err) {
-      console.error(err);
-      setPrinterStatus({ available: false, message: 'Error comprobando impresora' });
-    }
-  };
+  // Hooks de sincronización optimizada
+  useOptimizedCartSync(cart, setCart, showAlert);
+  useOptimizedProductSync(localProducts, setLocalProducts);
 
-  // Prueba de impresora
-  const handleTestPrinter = async () => {
-    if (!printerStatus.available || !window.api?.testPrinter) {
-      showAlert({ type: 'warning', message: 'No hay impresora disponible para prueba' });
-      return;
-    }
-    setIsSubmitting(true);
-    try {
-      const res = await window.api.testPrinter(printerStatus.printerName!);
-      if (res.success) {
-        showAlert({ type: 'success', message: 'Prueba de impresora enviada' });
-      } else {
-        throw new Error(res.error || 'Error desconocido');
-      }
-    } catch (err) {
-      console.error(err);
-      showAlert({ type: 'error', message: `Error al probar impresora: ${(err as Error).message}` });
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
+  // Listener específico para productos nuevos creados desde inventario
+  useSyncListener(['product:created', 'product:create'], (syncEvent) => {
+    if (syncEvent.data?.product) {
+      const newProduct = syncEvent.data.product;
+      console.log('➕ New product received in cash register:', newProduct.nombre);
+      
+      // Verificar si el producto ya existe antes de agregarlo
+      setLocalProducts(prev => {
+        const exists = prev.some(product => product.id === newProduct.id);
+        if (!exists) {
+          console.log('✅ Adding new product to cash register list');
+          return [
+            ...prev,
+            {
+              ...newProduct,
+              _isNew: true,
+              _isUpdated: true,
+              _updateTimestamp: Date.now()
+            }
+          ];
+        } else {
+          console.log('⚠️ Product already exists in cash register');
+          return prev;
+        }
+      });
 
-  // Mostrar diálogo de confirmación
-  const showConfirmDialog = (title: string, message: string, onConfirm: () => void, type: 'warning' | 'danger' | 'info' = 'warning') => {
-    setConfirmDialog({
-      isOpen: true,
-      title,
-      message,
-      onConfirm,
-      type
-    });
-  };
+      // Limpiar flags después de un momento
+      setTimeout(() => {
+        setLocalProducts(current => current.map(p => 
+          p.id === newProduct.id 
+            ? { ...p, _isNew: false, _isUpdated: false }
+            : p
+        ));
+      }, 3000);
+    }
+  });
+
+  // Sincronizar productos locales cuando cambien desde el hook de database
+  useEffect(() => {
+    setLocalProducts(products);
+  }, [products]);
+
+  // Hook de impresión unificado
+  const {
+    printers,
+    loading: printersLoading,
+    error: printerError,
+    printInvoice,
+    printLabel,
+    printBarcode,
+    printQR,
+    testPrinter,
+    openCashDrawer,
+    refreshPrinters,
+    clearError: clearPrinterError,
+    isReady: printerReady
+  } = usePrinter();
+
+  // Cargar impresoras al inicializar
+  useEffect(() => {
+    if (!printersLoading && printers.length === 0) {
+      refreshPrinters();
+    }
+  }, [printersLoading, printers.length, refreshPrinters]);
+
+  // La sincronización del carrito se maneja automáticamente con useOptimizedCartSync
 
   // Formatear moneda
   const formatCurrency = (amount: number) => {
     return new Intl.NumberFormat('es-DO', { style: 'currency', currency: 'DOP' }).format(amount);
   };
 
-  // Calcular totales (mejorado para manejar correctamente productos exentos)
+  // Calcular totales
   const calculateTotals = useMemo(() => {
-    // Subtotal sin impuestos
     let subtotalWithoutTax = 0;
-    // Total de ITBIS
     let taxAmount = 0;
 
-    // Iterar por cada item en el carrito
     cart.forEach(item => {
       if (item.is_exempt) {
-        // Si está exento, el precio es el precio final sin ITBIS
         subtotalWithoutTax += item.price * item.quantity;
       } else {
-        // Si no está exento, calculamos el precio sin ITBIS y el ITBIS
         const itemBasePrice = item.price_without_tax;
         const itemTax = item.price - itemBasePrice;
-
-        // Añadir al subtotal y al impuesto total
         subtotalWithoutTax += itemBasePrice * item.quantity;
         taxAmount += itemTax * item.quantity;
       }
     });
 
-    // El subtotal con impuestos es la suma del subtotal sin impuestos más los impuestos
     const subtotalWithTax = subtotalWithoutTax + taxAmount;
-
-    // El descuento se aplica al monto total
     const finalTotal = subtotalWithTax - discount;
 
     return {
@@ -272,7 +220,7 @@ const Caja: React.FC = () => {
 
   const { subtotalWithTax, subtotalWithoutTax, taxAmount, total } = calculateTotals;
 
-  // Función para calcular el cambio
+  // Calcular cambio
   const calculateChange = useMemo(() => {
     if (paymentMethod !== 'Efectivo' || amountReceived <= 0) {
       return 0;
@@ -280,11 +228,11 @@ const Caja: React.FC = () => {
     return amountReceived - total;
   }, [amountReceived, total, paymentMethod]);
 
-  // Filtrar productos según búsqueda y categoría
+  // Filtrar productos
   const filteredProducts = useMemo(() => {
     if (loadingProducts) return [];
 
-    return products.filter(product => {
+    return localProducts.filter(product => {
       const matchesSearch = searchTerm
         ? product.nombre.toLowerCase().includes(searchTerm.toLowerCase()) ||
         (product.codigo_barra && product.codigo_barra.toLowerCase().includes(searchTerm.toLowerCase()))
@@ -294,56 +242,46 @@ const Caja: React.FC = () => {
 
       return matchesSearch && matchesCategory && (product.stock > 0);
     });
-  }, [products, searchTerm, categoryFilter, loadingProducts]);
+  }, [localProducts, searchTerm, categoryFilter, loadingProducts]);
 
-  // Añadir producto al carrito (mejorado para cálculos de ITBIS)
+  // Añadir producto al carrito
   const addToCart = (product: Product) => {
     const existingItemIndex = cart.findIndex(item => item.product_id === product.id);
 
-    // Verificar si el producto está exento de ITBIS
     const isExempt = product.itebis === 0;
-
-    // Calcular el precio sin ITBIS
     const priceWithoutTax = isExempt
       ? product.precio_venta
       : product.precio_venta / (1 + product.itebis);
-
-    // Calcular precio con ITBIS ya incluido (para productos no exentos)
     const priceWithTax = product.precio_venta;
 
     if (existingItemIndex >= 0) {
-      // Si ya existe, incrementar cantidad
       const updatedCart = [...cart];
       const item = updatedCart[existingItemIndex];
       item.quantity += 1;
-
-      // Recalcular subtotal basado en la nueva cantidad
       item.subtotal = item.quantity * item.price;
       setCart(updatedCart);
     } else {
-      // Si no existe, añadir nuevo item
       setCart([...cart, {
         product_id: product.id!,
         name: product.nombre,
-        price: priceWithTax, // Precio que incluye ITBIS si aplica
-        price_without_tax: priceWithoutTax, // Precio sin ITBIS
+        price: priceWithTax,
+        price_without_tax: priceWithoutTax,
         quantity: 1,
-        subtotal: priceWithTax, // Subtotal inicial = precio con ITBIS incluido
-        itebis: product.itebis, // Tasa de ITBIS del producto
-        is_exempt: isExempt, // Indicador de exención
+        subtotal: priceWithTax,
+        itebis: product.itebis,
+        is_exempt: isExempt,
         discount: 0
       }]);
     }
   };
 
-  // Manejar el escaneo de códigos de barras
+  // Manejar búsqueda por código de barras
   const handleBarcodeSubmit = (e: React.FormEvent) => {
     e.preventDefault();
 
     if (!barcodeInput.trim()) return;
 
-    // Asegurarse de que código de barras se maneje como string
-    const product = products.find(p => p.codigo_barra === barcodeInput.trim());
+    const product = localProducts.find(p => p.codigo_barra === barcodeInput.trim());
 
     if (product) {
       addToCart(product);
@@ -364,15 +302,14 @@ const Caja: React.FC = () => {
     setCart(newCart);
   };
 
-  // Actualizar cantidad de producto en carrito
+  // Actualizar cantidad
   const updateQuantity = (index: number, newQuantity: number) => {
     if (newQuantity < 1) return;
 
     const updatedCart = [...cart];
     const item = updatedCart[index];
 
-    // Verificar stock disponible
-    const product = products.find(p => p.id === item.product_id);
+    const product = localProducts.find(p => p.id === item.product_id);
 
     if (product && newQuantity > product.stock) {
       showAlert({
@@ -403,18 +340,76 @@ const Caja: React.FC = () => {
     );
   };
 
-  // Generar vista previa de la factura
+  // Nueva venta - limpiar todo para empezar de cero
+  const handleNewSale = () => {
+    showConfirmDialog(
+      'Nueva Venta',
+      cart.length > 0 
+        ? '¿Deseas empezar una nueva venta? Se perderá el carrito actual.'
+        : '¿Deseas limpiar todo para empezar una nueva venta?',
+      () => {
+        setCart([]);
+        setDiscount(0);
+        setNotes('');
+        setAmountReceived(0);
+        setSelectedCustomer(1);
+        setSelectedCustomerName('Cliente General');
+        setPaymentMethod('Efectivo');
+        setPreviewMode(false);
+        setPreviewSale(null);
+        setBarcodeInput('');
+        setSearchTerm('');
+        setCategoryFilter('all');
+        showAlert({ 
+          type: 'success', 
+          message: 'Listo para nueva venta' 
+        });
+      },
+      'info'
+    );
+  };
+
+  // Probar impresora usando el hook
+  const handleTestPrinter = async () => {
+    if (!printerReady) {
+      showAlert({ type: 'warning', message: 'Sistema de impresión no está listo' });
+      return;
+    }
+
+    const printerName = settings?.impresora_termica;
+    if (!printerName) {
+      showAlert({ type: 'warning', message: 'No hay impresora configurada' });
+      return;
+    }
+
+    setIsSubmitting(true);
+    
+    try {
+      const result = await testPrinter(printerName);
+      
+      if (result.success) {
+        showAlert({ type: 'success', message: 'Prueba de impresora enviada correctamente' });
+      } else {
+        throw new Error(result.error || 'Error desconocido');
+      }
+    } catch (err) {
+      console.error(err);
+      showAlert({ type: 'error', message: `Error al probar impresora: ${(err as Error).message}` });
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  // Generar vista previa
   const generatePreview = () => {
     if (cart.length === 0) {
       showAlert({ type: 'warning', message: 'El carrito está vacío' });
       return;
     }
 
-    // Buscar el nombre del cliente seleccionado
     const customer = customers.find(c => c.id === selectedCustomer);
     const customerName = customer ? customer.nombre : 'Cliente General';
 
-    // Crear objeto de vista previa
     const preview: PreviewSale = {
       cliente_id: selectedCustomer,
       cliente: customerName,
@@ -434,25 +429,6 @@ const Caja: React.FC = () => {
 
     setPreviewSale(preview);
     setPreviewMode(true);
-  };
-
-  // Imprimir factura
-  const handlePrint = async () => {
-    if (!previewSale || !facturaRef.current) {
-      showAlert({ type: 'warning', message: 'No hay factura para imprimir' });
-      return;
-    }
-    setIsSubmitting(true);
-    try {
-      const html = facturaRef.current.outerHTML;
-      await invoiceManager.printInvoice(previewSale, html, { silent: true, copies: 1 });
-      showAlert({ type: 'success', message: 'Factura impresa correctamente' });
-    } catch (err) {
-      console.error(err);
-      showAlert({ type: 'error', message: `Error al imprimir: ${(err as Error).message}` });
-    } finally {
-      setIsSubmitting(false);
-    }
   };
 
   // Procesar venta
@@ -484,7 +460,7 @@ const Caja: React.FC = () => {
             subtotal: item.subtotal
           }));
 
-          // Validar el método de pago
+          // Validar método de pago
           const validPaymentMethod =
             (paymentMethod === 'Efectivo' ||
               paymentMethod === 'Tarjeta' ||
@@ -492,7 +468,7 @@ const Caja: React.FC = () => {
               ? paymentMethod
               : 'Efectivo';
 
-          // Objeto de venta con todos los datos necesarios
+          // Crear objeto de venta
           const sale: Sale = {
             cliente_id: selectedCustomer,
             total,
@@ -511,11 +487,11 @@ const Caja: React.FC = () => {
 
           console.log('Enviando datos de venta:', JSON.stringify(sale));
 
-          // Procesar la venta en la base de datos
+          // Procesar la venta
           let result: SaleResponse;
           if (window.api?.createSale) {
             result = (await window.api.createSale(sale)) as SaleResponse;
-            console.log('Venta procesada con window.api.createSale:', result);
+            console.log('Venta procesada:', result);
           } else {
             throw new Error('API de ventas no disponible');
           }
@@ -527,12 +503,12 @@ const Caja: React.FC = () => {
             throw new Error('No se recibió ID de la venta');
           }
 
-          // Guardar estado previo por si falla la impresión
+          // Guardar estado previo
           const previousCart = [...cart];
           const previousDiscount = discount;
           const previousNotes = notes;
 
-          // Limpiar inmediatamente carrito y datos
+          // Limpiar carrito
           setCart([]);
           setDiscount(0);
           setNotes('');
@@ -541,13 +517,11 @@ const Caja: React.FC = () => {
           // Mensaje de éxito
           let successMessage = 'Venta procesada con éxito';
           if (result.warnings?.length) {
-            successMessage =
-              'Venta procesada con advertencias: ' +
-              result.warnings[0];
+            successMessage = 'Venta procesada con advertencias: ' + result.warnings[0];
           }
           showAlert({ type: 'success', message: successMessage });
 
-          // Construir previewSale usando previousCart
+          // Crear preview de la venta
           const preview: PreviewSale = {
             id: result.id,
             cliente_id: selectedCustomer,
@@ -570,29 +544,67 @@ const Caja: React.FC = () => {
           setPreviewSale(preview);
           setPreviewMode(true);
 
-          // Sincronizar
-          broadcastSyncEvent('sale:create', {
-            saleId: result.id,
-            products: previousCart.map(item => ({
-              id: item.product_id,
-              quantity: item.quantity
-            }))
+          // Sincronizar - enviar eventos de stock actualizado como lo hace inventario
+          previousCart.forEach(item => {
+            const productToUpdate = localProducts.find(p => p.id === item.product_id);
+            if (productToUpdate) {
+              const newStock = Math.max(0, (productToUpdate.stock || 0) - item.quantity);
+              // Usar el mismo evento que usa el inventario para sincronización
+              broadcastSyncEvent('inventory', {
+                action: 'stock_updated',
+                data: {
+                  id: item.product_id,
+                  product: { ...productToUpdate, stock: newStock }
+                }
+              });
+            }
           });
 
-          // Imprimir tras venta si aplica
-          if (printAfterSale && previewSale) {
-            try { await handlePrint(); }
-            catch { showAlert({ type: 'warning', message: 'Venta ok, pero error al imprimir' }); }
+          // También enviar evento de venta para otros propósitos
+          broadcastSyncEvent('sale', {
+            action: 'create',
+            data: {
+              saleId: result.id,
+              products: previousCart.map(item => ({
+                id: item.product_id,
+                quantity: item.quantity
+              }))
+            }
+          });
+
+          // Imprimir si está habilitado usando el hook
+          if (printAfterSale && printerReady) {
+            try {
+              const printResult = await printInvoice(preview);
+              
+              if (printResult.success) {
+                showAlert({ type: 'success', message: 'Factura impresa correctamente' });
+                
+                // Abrir cajón si está configurado
+                if (settings?.open_cash_drawer) {
+                  await openCashDrawer();
+                }
+              } else {
+                showAlert({ 
+                  type: 'warning', 
+                  message: `Venta exitosa, pero error al imprimir: ${printResult.error}` 
+                });
+              }
+            } catch (error) {
+              showAlert({ 
+                type: 'warning', 
+                message: 'Venta exitosa, pero error al imprimir factura' 
+              });
+            }
           }
 
-          // Actualizar stock
+          // Actualizar inventario
           setTimeout(() => fetchProducts(), 1000);
         } catch (error) {
           console.error('Error al procesar venta:', error);
           showAlert({
             type: 'error',
-            message: `Error al procesar la venta: ${error instanceof Error ? error.message : 'Desconocido'
-              }`
+            message: `Error al procesar la venta: ${error instanceof Error ? error.message : 'Desconocido'}`
           });
         } finally {
           setIsSubmitting(false);
@@ -602,30 +614,157 @@ const Caja: React.FC = () => {
     );
   };
 
-  // Al montar o cambiar configuración
-  useEffect(() => {
-    checkThermalPrinter();
-  }, [settings]);
+  // Imprimir factura manualmente usando el hook
+  const handlePrint = async () => {
+    if (!previewSale) {
+      showAlert({ type: 'warning', message: 'No hay factura para imprimir' });
+      return;
+    }
+
+    if (!printerReady) {
+      showAlert({ type: 'error', message: 'Sistema de impresión no está listo' });
+      return;
+    }
+
+    setIsSubmitting(true);
+    
+    try {
+      const result = await printInvoice(previewSale);
+      
+      if (result.success) {
+        showAlert({ type: 'success', message: 'Factura impresa correctamente' });
+      } else {
+        throw new Error(result.error || 'Error desconocido');
+      }
+    } catch (err) {
+      console.error(err);
+      showAlert({ type: 'error', message: `Error al imprimir: ${(err as Error).message}` });
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  // Manejar opciones de impresión avanzadas usando el hook
+  const handleAdvancedPrint = () => {
+    setPrintDialogOpen(true);
+  };
+
+  const handlePrintOption = async (type: PrintType, data?: any) => {
+    setIsSubmitting(true);
+    setPrintDialogOpen(false);
+
+    try {
+      let result;
+      
+      switch (type) {
+        case 'factura':
+          if (!previewSale) {
+            throw new Error('No hay factura para imprimir');
+          }
+          result = await printInvoice(previewSale);
+          break;
+          
+        case 'etiqueta':
+          if (data?.product) {
+            result = await printLabel({
+              name: data.product.nombre,
+              price: data.product.precio_venta,
+              barcode: data.product.codigo_barra,
+              category: data.product.categoria
+            });
+          } else {
+            throw new Error('No hay producto seleccionado para la etiqueta');
+          }
+          break;
+          
+        case 'barcode':
+          if (data?.value) {
+            result = await printBarcode({
+              text: data.value,
+              name: `Producto ${data.value}`
+            });
+          } else {
+            throw new Error('No hay valor para el código de barras');
+          }
+          break;
+          
+        case 'qr':
+          if (data?.value) {
+            result = await printQR({
+              text: data.value,
+              title: 'Código QR'
+            });
+          } else {
+            throw new Error('No hay valor para el código QR');
+          }
+          break;
+          
+        default:
+          throw new Error('Tipo de impresión no válido');
+      }
+
+      if (result.success) {
+        showAlert({ type: 'success', message: `${type.charAt(0).toUpperCase() + type.slice(1)} impresa correctamente` });
+      } else {
+        throw new Error(result.error || 'Error desconocido');
+      }
+    } catch (error) {
+      console.error('Error en impresión avanzada:', error);
+      showAlert({ type: 'error', message: `Error: ${(error as Error).message}` });
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  // Abrir carpeta de PDFs
+  const handleOpenPdfFolder = async () => {
+    try {
+      const pdfPath = settings?.ruta_pdf;
+      if (!pdfPath) {
+        showAlert({ type: 'warning', message: 'No hay ruta configurada para las facturas PDF' });
+        return;
+      }
+
+      if (!window.api?.ensureDir || !window.api?.openFolder) {
+        throw new Error("API no disponible");
+      }
+
+      // Asegurar que la carpeta existe
+      const dirResult = await window.api.ensureDir(pdfPath);
+      if (!dirResult.success) {
+        throw new Error(`No se pudo crear la carpeta: ${dirResult.error}`);
+      }
+
+      // Abrir la carpeta
+      await window.api.openFolder(pdfPath);
+      showAlert({ type: 'success', message: 'Carpeta de facturas abierta correctamente' });
+    } catch (error) {
+      console.error('Error al abrir carpeta:', error);
+      showAlert({
+        type: 'error',
+        message: `No se pudo abrir la carpeta: ${error instanceof Error ? error.message : 'Error desconocido'}`
+      });
+    }
+  };
 
   // Regresar al home
   const handleGoBack = () => {
     if (previewMode) {
-      // Si estamos en modo vista previa de una venta completada, limpiar todo
       if (previewSale?.estado === 'Completada') {
-        setCart([]);
-        setDiscount(0);
-        setNotes('');
-        setAmountReceived(0);
+        // NO limpiar automáticamente - permitir al usuario continuar trabajando
         setPreviewMode(false);
         setPreviewSale(null);
+        // Mensaje informativo para el usuario
+        showAlert({ 
+          type: 'info', 
+          message: 'Venta completada. Puede continuar con una nueva venta.' 
+        });
         return;
       }
-      // Si es sólo una vista previa sin venta completada, volver al carrito
       setPreviewMode(false);
       return;
     }
 
-    // Si hay productos en el carrito, confirmar antes de salir
     if (cart.length > 0) {
       showConfirmDialog(
         'Salir del módulo de caja',
@@ -644,48 +783,7 @@ const Caja: React.FC = () => {
     }
   };
 
-  // Abrir carpeta de facturas
-  const handleOpenPdfFolder = async () => {
-    try {
-      const api = window.api;
-
-      if (!settings?.ruta_pdf) {
-        showAlert({ type: 'warning', message: 'No hay una ruta configurada para las facturas' });
-        return;
-      }
-
-      if (!api) {
-        throw new Error("API no disponible");
-      }
-
-      // Definir ruta de facturas
-      const facturaPath = settings.ruta_pdf;
-
-      // Asegurar que la carpeta existe antes de intentar abrirla
-      if (api.ensureDir) {
-        const dirResult = await api.ensureDir(facturaPath);
-        if (!dirResult.success) {
-          throw new Error(`No se pudo crear la carpeta: ${dirResult.error}`);
-        }
-      }
-
-      // Abrir la carpeta
-      if (api.openFolder) {
-        await api.openFolder(facturaPath);
-        showAlert({ type: 'success', message: 'Carpeta de facturas abierta correctamente' });
-      } else {
-        showAlert({ type: 'info', message: `Ruta de facturas: ${facturaPath}` });
-      }
-    } catch (error) {
-      console.error('Error al abrir carpeta:', error);
-      showAlert({
-        type: 'error',
-        message: `No se pudo abrir la carpeta: ${error instanceof Error ? error.message : 'Error desconocido'}`
-      });
-    }
-  };
-
-  // Seleccionar cliente y guardar su nombre
+  // Actualizar cliente seleccionado
   useEffect(() => {
     if (customers.length > 0) {
       const customer = customers.find(c => c.id === selectedCustomer);
@@ -697,14 +795,33 @@ const Caja: React.FC = () => {
     }
   }, [selectedCustomer, customers]);
 
-  // Resetea el monto recibido cuando cambia el método de pago
+  // Resetear monto recibido cuando cambia el método de pago
   useEffect(() => {
     if (paymentMethod === 'Efectivo') {
-      setAmountReceived(total); // Solo establece inicialmente
+      setAmountReceived(total);
     } else {
       setAmountReceived(0);
     }
   }, [paymentMethod, total]);
+
+  // Manejar errores de impresora
+  useEffect(() => {
+    if (printerError) {
+      showAlert({ type: 'error', message: printerError });
+      clearPrinterError();
+    }
+  }, [printerError, clearPrinterError]);
+
+  // Mostrar confirmación
+  const showConfirmDialog = (title: string, message: string, onConfirm: () => void, type: 'warning' | 'danger' | 'info' = 'warning') => {
+    setConfirmDialog({
+      isOpen: true,
+      title,
+      message,
+      onConfirm,
+      type
+    });
+  };
 
   // Componente de Alerta
   const Alert: React.FC<{
@@ -734,11 +851,138 @@ const Caja: React.FC = () => {
       </div>
     );
   };
-  // Si estamos en modo vista previa, mostramos la factura
+
+  // Componente de diálogo de impresión avanzada
+  const PrintDialog: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ isOpen, onClose }) => {
+    if (!isOpen) return null;
+
+    return (
+      <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+        <div className="bg-white rounded-lg p-6 w-full max-w-md">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-lg font-semibold">Opciones de Impresión</h3>
+            <button onClick={onClose} className="text-gray-400 hover:text-gray-600">
+              <X className="h-5 w-5" />
+            </button>
+          </div>
+
+          <div className="space-y-3">
+            {/* Imprimir factura */}
+            {previewSale && (
+              <button
+                onClick={() => handlePrintOption('factura')}
+                className="w-full flex items-center gap-3 p-3 border rounded-lg hover:bg-gray-50"
+                disabled={isSubmitting}
+              >
+                <FileText className="h-5 w-5 text-blue-600" />
+                <div className="text-left">
+                  <div className="font-medium">Imprimir Factura</div>
+                  <div className="text-sm text-gray-500">Factura completa</div>
+                </div>
+              </button>
+            )}
+
+            {/* Imprimir etiquetas de productos */}
+            <div className="border rounded-lg p-3">
+              <div className="flex items-center gap-3 mb-2">
+                <Package className="h-5 w-5 text-green-600" />
+                <div>
+                  <div className="font-medium">Imprimir Etiquetas</div>
+                  <div className="text-sm text-gray-500">Etiquetas de productos del carrito</div>
+                </div>
+              </div>
+              <div className="space-y-1 max-h-32 overflow-y-auto">
+                {cart.map((item, index) => {
+                  const product = localProducts.find(p => p.id === item.product_id);
+                  if (!product) return null;
+                  
+                  return (
+                    <button
+                      key={index}
+                      onClick={() => handlePrintOption('etiqueta', { product })}
+                      className="w-full text-left p-2 text-sm rounded hover:bg-gray-50"
+                      disabled={isSubmitting}
+                    >
+                      {item.name} - {formatCurrency(item.price)}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Imprimir código de barras personalizado */}
+            <div className="border rounded-lg p-3">
+              <div className="flex items-center gap-3 mb-2">
+                <Barcode className="h-5 w-5 text-orange-600" />
+                <div>
+                  <div className="font-medium">Código de Barras</div>
+                  <div className="text-sm text-gray-500">Imprimir código personalizado</div>
+                </div>
+              </div>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  placeholder="Ingrese código"
+                  className="flex-1 p-2 border rounded text-sm"
+                  value={customPrintData.barcodeValue}
+                  onChange={(e) => setCustomPrintData(prev => ({ ...prev, barcodeValue: e.target.value }))}
+                />
+                <button
+                  onClick={() => handlePrintOption('barcode', { value: customPrintData.barcodeValue })}
+                  className="px-3 py-2 bg-orange-600 text-white rounded text-sm hover:bg-orange-700"
+                  disabled={isSubmitting || !customPrintData.barcodeValue.trim()}
+                >
+                  Imprimir
+                </button>
+              </div>
+            </div>
+
+            {/* Imprimir código QR personalizado */}
+            <div className="border rounded-lg p-3">
+              <div className="flex items-center gap-3 mb-2">
+                <QrCode className="h-5 w-5 text-purple-600" />
+                <div>
+                  <div className="font-medium">Código QR</div>
+                  <div className="text-sm text-gray-500">Imprimir QR personalizado</div>
+                </div>
+              </div>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  placeholder="Ingrese texto o URL"
+                  className="flex-1 p-2 border rounded text-sm"
+                  value={customPrintData.qrValue}
+                  onChange={(e) => setCustomPrintData(prev => ({ ...prev, qrValue: e.target.value }))}
+                />
+                <button
+                  onClick={() => handlePrintOption('qr', { value: customPrintData.qrValue })}
+                  className="px-3 py-2 bg-purple-600 text-white rounded text-sm hover:bg-purple-700"
+                  disabled={isSubmitting || !customPrintData.qrValue.trim()}
+                >
+                  Imprimir
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div className="flex gap-2 mt-6">
+            <button
+              onClick={onClose}
+              className="flex-1 px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50"
+            >
+              Cancelar
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  // Renderizado en modo vista previa
   if (previewMode && previewSale) {
     return (
       <div className="min-h-full bg-gray-50 flex flex-col">
-        {/* Alerta */}
+        {/* Alertas */}
         {alerts.length > 0 && (
           <div className="fixed top-6 right-6 z-50 max-w-md w-full space-y-2">
             {alerts.map(alert => (
@@ -766,24 +1010,33 @@ const Caja: React.FC = () => {
             <button
               className="py-2 px-4 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors flex items-center gap-2"
               onClick={handlePrint}
-              disabled={isSubmitting}
+              disabled={isSubmitting || !printerReady}
             >
               <Printer className="h-4 w-4" />
-              <span>{isSubmitting ? 'Imprimiendo...' : 'Imprimir'}</span>
+              <span>{isSubmitting ? 'Imprimiendo...' : 'Imprimir Factura'}</span>
             </button>
-            {settings.ruta_pdf && (
+            <button
+              className="py-2 px-4 bg-purple-600 hover:bg-purple-700 text-white rounded-lg transition-colors flex items-center gap-2"
+              onClick={handleAdvancedPrint}
+              disabled={isSubmitting}
+            >
+              <Settings className="h-4 w-4" />
+              <span>Más Opciones</span>
+            </button>
+            {settings?.guardar_pdf && settings?.ruta_pdf && (
               <button
                 className="py-2 px-4 bg-gray-600 hover:bg-gray-700 text-white rounded-lg transition-colors flex items-center gap-2"
                 onClick={handleOpenPdfFolder}
               >
                 <Folder className="h-4 w-4" />
-                <span>Ver Carpeta</span>
+                <span>Ver PDFs</span>
               </button>
             )}
             {previewSale.estado === 'Pendiente' && (
               <button
                 className="py-2 px-4 bg-green-600 hover:bg-green-700 text-white rounded-lg transition-colors flex items-center gap-2"
                 onClick={processSale}
+                disabled={isSubmitting}
               >
                 <Check className="h-4 w-4" />
                 <span>Confirmar Venta</span>
@@ -801,6 +1054,9 @@ const Caja: React.FC = () => {
           </div>
         </main>
 
+        {/* Diálogo de impresión avanzada */}
+        <PrintDialog isOpen={printDialogOpen} onClose={() => setPrintDialogOpen(false)} />
+
         {/* Diálogo de confirmación */}
         <ConfirmDialog
           isOpen={confirmDialog.isOpen}
@@ -814,9 +1070,10 @@ const Caja: React.FC = () => {
     );
   }
 
+  // Renderizado principal
   return (
     <div className="min-h-full bg-gray-50 flex flex-col">
-      {/* Alerta */}
+      {/* Alertas */}
       {alerts.length > 0 && (
         <div className="fixed top-6 right-6 z-50 max-w-md w-full space-y-2">
           {alerts.map(alert => (
@@ -840,52 +1097,62 @@ const Caja: React.FC = () => {
             <h1 className="text-2xl font-bold text-gray-800">Punto de Venta</h1>
           </div>
 
-          {/* Printer status indicator */}
+          {/* Indicador de estado de impresora */}
           <div className={`ml-4 flex items-center gap-2 py-1 px-3 rounded-full text-sm
-            ${printerStatus.available
+            ${printerReady && printers.length > 0
               ? 'bg-green-50 text-green-700 border border-green-200'
               : 'bg-yellow-50 text-yellow-700 border border-yellow-200'}`}>
             <Printer className="h-3 w-3" />
             <span className="hidden sm:inline">
-              {printerStatus.available
-                ? `Impresora: ${printerStatus.printerName || 'Térmica'}`
-                : 'No hay impresora térmica'}
+              {printerReady && printers.length > 0
+                ? `${printers.length} impresora${printers.length > 1 ? 's' : ''} disponible${printers.length > 1 ? 's' : ''}`
+                : 'Impresoras no configuradas'}
             </span>
           </div>
 
-          {/* Refresh printer status button */}
-          <button
-            onClick={checkThermalPrinter}
-            className="ml-1 p-1 rounded text-gray-500 hover:bg-gray-100"
-            title="Actualizar estado de impresora"
-          >
-            <RotateCcw className="h-3 w-3" />
-          </button>
-
-          {/* Test printer button */}
+          {/* Botón de prueba de impresora */}
           <button
             onClick={handleTestPrinter}
             className="ml-1 py-1 px-2 text-xs rounded bg-gray-100 hover:bg-gray-200 text-gray-700 flex items-center gap-1"
             title="Probar impresora"
-            disabled={isSubmitting || !printerStatus.available}
+            disabled={isSubmitting || !printerReady}
           >
             <Printer className="h-3 w-3" />
             <span>Probar</span>
+          </button>
+
+          {/* Botón de recargar impresoras */}
+          <button
+            onClick={refreshPrinters}
+            className="ml-1 py-1 px-2 text-xs rounded bg-gray-100 hover:bg-gray-200 text-gray-700 flex items-center gap-1"
+            title="Actualizar impresoras"
+            disabled={printersLoading}
+          >
+            <RotateCcw className={`h-3 w-3 ${printersLoading ? 'animate-spin' : ''}`} />
+            <span>Actualizar</span>
           </button>
         </div>
       </header>
 
       <main className="flex-1 px-6 pb-8">
         <div className="flex flex-col xl:flex-row gap-6">
-          {/* Panel de carrito (lado izquierdo en pantallas grandes) */}
+          {/* Panel de carrito */}
           <div className="xl:w-2/5 bg-white rounded-md shadow-md overflow-hidden">
             <div className="p-4 border-b flex justify-between items-center">
               <h2 className="font-medium text-gray-800">Carrito de Compra</h2>
               <div className="flex gap-2">
                 <button
+                  onClick={handleNewSale}
+                  className="p-2 rounded-lg text-blue-600 hover:bg-blue-50 transition-colors"
+                  title="Nueva Venta - Limpiar todo"
+                >
+                  <RotateCcw className="h-5 w-5" />
+                </button>
+                <button
                   onClick={clearCart}
                   disabled={cart.length === 0}
                   className={`p-2 rounded-lg text-red-600 hover:bg-red-50 ${cart.length === 0 ? 'opacity-50 cursor-not-allowed' : ''}`}
+                  title="Limpiar Carrito"
                 >
                   <Trash2 className="h-5 w-5" />
                 </button>
@@ -1000,7 +1267,7 @@ const Caja: React.FC = () => {
                   <span className="font-medium">{formatCurrency(subtotalWithoutTax)}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-gray-600">ITBIS:</span>
+                  <span className="text-gray-600">{settings?.impuesto_nombre || 'ITBIS'}:</span>
                   <span className="font-medium">{formatCurrency(taxAmount)}</span>
                 </div>
                 <div className="flex justify-between items-center">
@@ -1093,7 +1360,7 @@ const Caja: React.FC = () => {
                   ></textarea>
                 </div>
 
-                {/* Auto-print option */}
+                {/* Opción de impresión automática */}
                 <div className="flex items-center justify-between">
                   <label htmlFor="autoPrint" className="text-sm font-medium text-gray-700 flex items-center gap-2">
                     <Printer className="h-4 w-4 text-gray-500" />
@@ -1114,7 +1381,6 @@ const Caja: React.FC = () => {
 
                 {/* Botones de acción */}
                 <div className="grid grid-cols-2 gap-2">
-                  {/* Botón de vista previa */}
                   <button
                     className="py-2 px-4 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-100 transition-colors flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                     onClick={generatePreview}
@@ -1124,21 +1390,20 @@ const Caja: React.FC = () => {
                     <span>Vista Previa</span>
                   </button>
 
-                  {/* Botón de procesar */}
                   <button
                     className="py-2 px-4 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                     onClick={processSale}
-                    disabled={cart.length === 0}
+                    disabled={cart.length === 0 || isSubmitting}
                   >
                     <DollarSign className="h-5 w-5" />
-                    <span>Procesar Venta</span>
+                    <span>{isSubmitting ? 'Procesando...' : 'Procesar Venta'}</span>
                   </button>
                 </div>
               </div>
             </div>
           </div>
 
-          {/* Panel de productos (lado derecho en pantallas grandes) */}
+          {/* Panel de productos */}
           <div className="xl:w-3/5 flex flex-col gap-4">
             {/* Búsqueda y filtros */}
             <div className="bg-white p-4 rounded-xl shadow-md">
@@ -1188,10 +1453,10 @@ const Caja: React.FC = () => {
               ) : (
                 <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-4">
                   {filteredProducts.map((product) => (
-                    <div
-                      key={product.id}
-                      className="shadow-md rounded-lg overflow-hidden hover:shadow-md transition-shadow cursor-pointer relative"
-                      onClick={() => addToCart(product)}
+                      <div
+                        key={product.id}
+                        className="shadow-md rounded-lg overflow-hidden hover:shadow-md transition-shadow cursor-pointer relative group"
+                        onClick={() => addToCart(product)}
                     >
                       <div className="h-28 bg-gray-50 flex items-center justify-center">
                         {product.imagen ? (
@@ -1203,7 +1468,7 @@ const Caja: React.FC = () => {
                         )}
                       </div>
 
-                      {/* Indicador de stock bajo - usando stock_minimo */}
+                      {/* Indicador de stock bajo */}
                       {product.stock > 0 && product.stock_minimo && product.stock < product.stock_minimo && (
                         <Badge variant="destructive" className="absolute right-1 top-1 rounded-lg text-xs font-medium">
                           Stock: {product.stock}
@@ -1217,7 +1482,7 @@ const Caja: React.FC = () => {
                         </Badge>
                       )}
 
-                      {/* Categoría con manejo de texto largo */}
+                      {/* Categoría */}
                       <Badge
                         variant="outline"
                         className="absolute left-1 top-1 text-xs rounded-lg bg-blue-50 text-blue-700 border-blue-200 max-w-[calc(100%-45px)] overflow-hidden"
@@ -1227,6 +1492,18 @@ const Caja: React.FC = () => {
                         </span>
                       </Badge>
 
+                      {/* Botón flotante para imprimir etiqueta */}
+                      <button
+                        className="absolute bottom-2 right-2 opacity-0 group-hover:opacity-100 bg-green-600 hover:bg-green-700 text-white p-1.5 rounded-full transition-all duration-200 shadow-md"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handlePrintOption('etiqueta', { product });
+                        }}
+                        title="Imprimir etiqueta"
+                      >
+                        <Package className="h-3 w-3" />
+                      </button>
+
                       <div className="p-3">
                         <h3 className="font-medium text-gray-800 truncate" title={product.nombre}>
                           {product.nombre}
@@ -1235,8 +1512,13 @@ const Caja: React.FC = () => {
                           <span className="text-blue-600 font-medium">{formatCurrency(product.precio_venta)}</span>
                           <span className="text-xs text-gray-500">Stock: {product.stock}</span>
                         </div>
+                        {product.codigo_barra && (
+                          <div className="text-xs text-gray-400 mt-1 truncate" title={product.codigo_barra}>
+                            {product.codigo_barra}
+                          </div>
+                        )}
                       </div>
-                    </div>
+                      </div>
                   ))}
                 </div>
               )}
@@ -1244,6 +1526,9 @@ const Caja: React.FC = () => {
           </div>
         </div>
       </main>
+
+      {/* Diálogo de impresión avanzada */}
+      <PrintDialog isOpen={printDialogOpen} onClose={() => setPrintDialogOpen(false)} />
 
       {/* Diálogo de confirmación */}
       <ConfirmDialog

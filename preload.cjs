@@ -1,9 +1,8 @@
-// preload.cjs - Versión simplificada aplicando principio DRY
+// preload.cjs - Versión unificada con sistema de impresión corregido
 const { contextBridge, ipcRenderer } = require('electron');
 
 /**
  * Utility para crear wrappers de IPC con manejo de errores consistente
- * Principio DRY - No repetir código de manejo de errores
  */
 function createIpcWrapper(channel) {
   return async (...args) => {
@@ -22,7 +21,6 @@ function createIpcWrapper(channel) {
 function createIpcWrappers(channels) {
   const wrappers = {};
   channels.forEach(channel => {
-    // Convertir kebab-case a camelCase para nombres de método
     const methodName = channel.replace(/-([a-z])/g, (g) => g[1].toUpperCase());
     wrappers[methodName] = createIpcWrapper(channel);
   });
@@ -36,7 +34,7 @@ contextBridge.exposeInMainWorld('versions', {
   electron: () => process.versions.electron
 });
 
-// API principal unificada - Principio de Responsabilidad Única
+// API principal unificada
 contextBridge.exposeInMainWorld('api', {
   // === CONTROL DE VENTANAS ===
   minimize: createIpcWrapper('minimize'),
@@ -66,7 +64,6 @@ contextBridge.exposeInMainWorld('api', {
     'productos:actualizar',
     'productos:eliminar'
   ]),
-  // Alias más amigables
   getProducts: createIpcWrapper('productos:obtener'),
   addProduct: createIpcWrapper('productos:insertar'),
   updateProduct: createIpcWrapper('productos:actualizar'),
@@ -79,7 +76,6 @@ contextBridge.exposeInMainWorld('api', {
     'usuarios:actualizar',
     'usuarios:eliminar'
   ]),
-  // Alias más amigables
   getUsers: createIpcWrapper('usuarios:obtener'),
   addUser: createIpcWrapper('usuarios:insertar'),
   updateUser: createIpcWrapper('usuarios:actualizar'),
@@ -92,7 +88,6 @@ contextBridge.exposeInMainWorld('api', {
     'categorias:actualizar',
     'categorias:eliminar'
   ]),
-  // Alias más amigables
   getCategories: createIpcWrapper('categorias:obtener'),
   addCategory: createIpcWrapper('categorias:insertar'),
   updateCategory: createIpcWrapper('categorias:actualizar'),
@@ -105,7 +100,6 @@ contextBridge.exposeInMainWorld('api', {
     'clientes:actualizar',
     'clientes:eliminar'
   ]),
-  // Alias más amigables
   getCustomers: createIpcWrapper('clientes:obtener'),
   addCustomer: createIpcWrapper('clientes:insertar'),
   updateCustomer: createIpcWrapper('clientes:actualizar'),
@@ -123,15 +117,44 @@ contextBridge.exposeInMainWorld('api', {
   getSalesReport: createIpcWrapper('reportes:ventas'),
   getTopProducts: createIpcWrapper('reportes:topProductos'),
   
+  // === DESCUENTOS ===
+  getDiscounts: createIpcWrapper('descuentos:obtener'),
+  getDiscountById: createIpcWrapper('descuentos:obtenerPorId'),
+  getActiveDiscounts: createIpcWrapper('descuentos:obtenerActivos'),
+  createDiscount: createIpcWrapper('descuentos:insertar'),
+  updateDiscount: createIpcWrapper('descuentos:actualizar'),
+  deleteDiscount: createIpcWrapper('descuentos:eliminar'),
+  toggleDiscountActive: createIpcWrapper('descuentos:toggleActivo'),
+  getApplicableDiscounts: createIpcWrapper('descuentos:obtenerAplicables'),
+  getDiscountByCoupon: createIpcWrapper('descuentos:obtenerPorCupon'),
+  
+  // === OFERTAS ===
+  getOffers: createIpcWrapper('ofertas:obtener'),
+  getOfferById: createIpcWrapper('ofertas:obtenerPorId'),
+  getActiveOffers: createIpcWrapper('ofertas:obtenerActivas'),
+  createOffer: createIpcWrapper('ofertas:insertar'),
+  updateOffer: createIpcWrapper('ofertas:actualizar'),
+  deleteOffer: createIpcWrapper('ofertas:eliminar'),
+  toggleOfferActive: createIpcWrapper('ofertas:toggleActivo'),
+  getApplicableOffers: createIpcWrapper('ofertas:obtenerAplicables'),
+  calculateOfferDiscount: createIpcWrapper('ofertas:calcularDescuento'),
+  
+  // === DESCUENTOS APLICADOS ===
+  getAppliedDiscounts: createIpcWrapper('descuentosAplicados:obtener'),
+  getAppliedDiscountsByVenta: createIpcWrapper('descuentosAplicados:obtenerPorVenta'),
+  createAppliedDiscount: createIpcWrapper('descuentosAplicados:insertar'),
+  getDiscountTotalsByPeriod: createIpcWrapper('descuentosAplicados:obtenerTotalesPorPeriodo'),
+  getMostUsedDiscounts: createIpcWrapper('descuentosAplicados:obtenerMasUsados'),
+  getDiscountEffectiveness: createIpcWrapper('descuentosAplicados:obtenerEfectividad'),
+  
+  // === REPORTES FINANCIEROS ===
+  getBalanceSheet: createIpcWrapper('reportesFinancieros:balanceGeneral'),
+  getIncomeStatement: createIpcWrapper('reportesFinancieros:estadoResultados'),
+  getCashFlowStatement: createIpcWrapper('reportesFinancieros:flujoEfectivo'),
+  
   // === CONFIGURACIÓN ===
   getSettings: createIpcWrapper('configuracion:obtener'),
   saveSettings: createIpcWrapper('configuracion:actualizar'),
-  
-  // === IMPRESIÓN ===
-  getPrinters: createIpcWrapper('get-printers'),
-  printRaw: createIpcWrapper('print-raw'),
-  testPrinter: createIpcWrapper('test-printer'),
-  savePdf: createIpcWrapper('save-pdf'),
   
   // === EVENTOS DE SINCRONIZACIÓN ===
   registerSyncListener: () => {
@@ -150,17 +173,16 @@ contextBridge.exposeInMainWorld('api', {
 });
 
 /**
- * API de impresión dedicada con mejor manejo de errores
- * Principio de Interface Segregation - API específica para impresión
+ * API de impresión UNIFICADA - reemplaza printApi y printerApi
  */
-contextBridge.exposeInMainWorld('printApi', {
+contextBridge.exposeInMainWorld('printerAPI', {
   // Obtener impresoras disponibles
   async getPrinters() {
     try {
-      const printers = await ipcRenderer.invoke('get-printers');
+      const result = await ipcRenderer.invoke('printer:get-printers');
       return {
         success: true,
-        printers: Array.isArray(printers) ? printers : []
+        printers: Array.isArray(result) ? result : []
       };
     } catch (error) {
       console.error('Error obteniendo impresoras:', error);
@@ -172,10 +194,133 @@ contextBridge.exposeInMainWorld('printApi', {
     }
   },
 
+  // Imprimir factura (usando ESC/POS)
+  async printInvoice(saleData, printerName) {
+    try {
+      const result = await ipcRenderer.invoke('printer:print-invoice', { 
+        saleData, 
+        printerName 
+      });
+      return result;
+    } catch (error) {
+      console.error('Error en printInvoice:', error);
+      return {
+        success: false,
+        error: error?.message || 'Error desconocido en printInvoice'
+      };
+    }
+  },
+
+  // React Native Thermal Printer - EPToolkit
+  async printInvoiceRN(saleData, printerName) {
+    try {
+      console.log('🖨️ Preload: Calling React Native thermal printer...');
+      const result = await ipcRenderer.invoke('printer:print-invoice-rn', { 
+        saleData, 
+        printerName 
+      });
+      console.log('📋 Preload: React Native print result:', result);
+      return result;
+    } catch (error) {
+      console.error('❌ Error en printInvoiceRN:', error);
+      return {
+        success: false,
+        error: error?.message || 'Error desconocido en React Native printer'
+      };
+    }
+  },
+
+  // Test React Native thermal printer
+  async testThermalPrinterRN() {
+    try {
+      console.log('🧪 Preload: Testing React Native thermal printer...');
+      const result = await ipcRenderer.invoke('printer:test-rn');
+      console.log('📋 Preload: Test result:', result);
+      return result;
+    } catch (error) {
+      console.error('❌ Error en testThermalPrinterRN:', error);
+      return {
+        success: false,
+        error: error?.message || 'Error desconocido en test RN printer'
+      };
+    }
+  },
+
+  // Test raw thermal printer communication
+  async testRawPrinter() {
+    try {
+      console.log('🧪 Preload: Testing raw printer communication...');
+      const result = await ipcRenderer.invoke('printer:test-raw');
+      console.log('📋 Preload: Raw test result:', result);
+      return result;
+    } catch (error) {
+      console.error('❌ Error en testRawPrinter:', error);
+      return {
+        success: false,
+        error: error?.message || 'Error desconocido en test raw printer'
+      };
+    }
+  },
+
+  // Imprimir etiqueta
+  async printLabel(labelData, printerName) {
+    try {
+      const result = await ipcRenderer.invoke('printer:print-label', { 
+        labelData, 
+        printerName 
+      });
+      return result;
+    } catch (error) {
+      console.error('Error en printLabel:', error);
+      return {
+        success: false,
+        error: error?.message || 'Error desconocido en printLabel'
+      };
+    }
+  },
+
+  // Imprimir código de barras
+  async printBarcode(barcodeData, printerName) {
+    try {
+      const result = await ipcRenderer.invoke('printer:print-barcode', { 
+        barcodeData, 
+        printerName 
+      });
+      return result;
+    } catch (error) {
+      console.error('Error en printBarcode:', error);
+      return {
+        success: false,
+        error: error?.message || 'Error desconocido en printBarcode'
+      };
+    }
+  },
+
+  // Imprimir código QR
+  async printQR(qrData, printerName) {
+    try {
+      const result = await ipcRenderer.invoke('printer:print-qr', { 
+        qrData, 
+        printerName 
+      });
+      return result;
+    } catch (error) {
+      console.error('Error en printQR:', error);
+      return {
+        success: false,
+        error: error?.message || 'Error desconocido en printQR'
+      };
+    }
+  },
+
   // Imprimir comandos ESC/POS raw
   async printRaw(data, printerName) {
     try {
-      return await ipcRenderer.invoke('print-raw', data, printerName);
+      const result = await ipcRenderer.invoke('printer:print-raw', { 
+        data, 
+        printerName 
+      });
+      return result;
     } catch (error) {
       console.error('Error en printRaw:', error);
       return {
@@ -188,7 +333,10 @@ contextBridge.exposeInMainWorld('printApi', {
   // Probar impresora
   async testPrinter(printerName) {
     try {
-      return await ipcRenderer.invoke('test-printer', { printerName });
+      const result = await ipcRenderer.invoke('printer:test-printer', { 
+        printerName 
+      });
+      return result;
     } catch (error) {
       console.error('Error probando impresora:', error);
       return {
@@ -198,10 +346,27 @@ contextBridge.exposeInMainWorld('printApi', {
     }
   },
 
+  // Abrir cajón de dinero
+  async openCashDrawer(printerName) {
+    try {
+      const result = await ipcRenderer.invoke('printer:open-cash-drawer', { 
+        printerName 
+      });
+      return result;
+    } catch (error) {
+      console.error('Error abriendo cajón:', error);
+      return {
+        success: false,
+        error: error?.message || 'Error desconocido abriendo cajón'
+      };
+    }
+  },
+
   // Guardar como PDF
   async savePdf(options) {
     try {
-      return await ipcRenderer.invoke('save-pdf', options);
+      const result = await ipcRenderer.invoke('printer:save-pdf', options);
+      return result;
     } catch (error) {
       console.error('Error guardando PDF:', error);
       return {
@@ -212,23 +377,33 @@ contextBridge.exposeInMainWorld('printApi', {
   }
 });
 
-// Mantener compatibilidad con código existente
-// Principio de Open/Closed - Extender sin modificar código existente
+// Mantener compatibilidad temporal con código existente
+contextBridge.exposeInMainWorld('printApi', {
+  getPrinters: () => window.printerAPI.getPrinters(),
+  printFactura: (html, printerName) => window.printerAPI.printInvoice({ html }, printerName),
+  printFacturaRN: (saleData, printerName) => window.printerAPI.printInvoiceRN(saleData, printerName),
+  printEtiqueta: (html, printerName) => window.printerAPI.printLabel({ html }, printerName),
+  printBarcode: (html, printerName) => window.printerAPI.printBarcode({ html }, printerName),
+  printQR: (html, printerName) => window.printerAPI.printQR({ html }, printerName),
+  printRaw: (data, printerName) => window.printerAPI.printRaw(data, printerName),
+  testPrinter: (printerName) => window.printerAPI.testPrinter(printerName),
+  testThermalRN: () => window.printerAPI.testThermalPrinterRN(),
+  testRawPrinter: () => window.printerAPI.testRawPrinter(),
+  savePdf: (options) => window.printerAPI.savePdf(options)
+});
+
+// También mantener printerApi para compatibilidad
 contextBridge.exposeInMainWorld('printerApi', {
-  getPrinters: async () => {
-    const result = await window.printApi.getPrinters();
-    return result;
-  },
-  
-  printRaw: async (data, printerName) => {
-    return await window.printApi.printRaw(data, printerName);
-  },
-  
-  testPrinter: async (printerName) => {
-    return await window.printApi.testPrinter(printerName);
-  },
-  
-  savePdf: async (options) => {
-    return await window.printApi.savePdf(options);
-  }
+  getPrinters: () => window.printerAPI.getPrinters(),
+  printRaw: (data, printerName) => window.printerAPI.printRaw(data, printerName),
+  testPrinter: (printerName) => window.printerAPI.testPrinter(printerName),
+  savePdf: (options) => window.printerAPI.savePdf(options),
+  printFactura: (html, printerName) => window.printerAPI.printInvoice({ html }, printerName),
+  printFacturaRN: (saleData, printerName) => window.printerAPI.printInvoiceRN(saleData, printerName),
+  printEtiqueta: (html, printerName) => window.printerAPI.printLabel({ html }, printerName),
+  printBarcode: (html, printerName) => window.printerAPI.printBarcode({ html }, printerName),
+  printQR: (html, printerName) => window.printerAPI.printQR({ html }, printerName),
+  testThermalRN: () => window.printerAPI.testThermalPrinterRN(),
+  testRawPrinter: () => window.printerAPI.testRawPrinter(),
+  openCashDrawer: (printerName) => window.printerAPI.openCashDrawer(printerName)
 });
